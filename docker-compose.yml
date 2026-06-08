@@ -1,0 +1,12 @@
+services:
+  subtitle-web:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - /vol3:/videos           # 视频目录（需可写，用于输出字幕）
+      - ./data:/data              # 配置和输出
+    environment:
+      - DATA_DIR=/data
+      - VIDEO_MOUNT=/videos
+    restart: unless-stopped

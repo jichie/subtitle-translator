@@ -1,0 +1,9 @@
+data/config.json
+data/guide_cache.json
+data/history.json
+data/watch_folders.json
+__pycache__/
+*.pyc
+build.log
+.DS_Store
+*.log
