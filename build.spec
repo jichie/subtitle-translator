@@ -14,9 +14,12 @@ from pathlib import Path
 BLOCK_CATALOGS = []
 APP_NAME = "SubtitleTranslator"
 
+# 兼容 PyInstaller spec 命名空间（__file__ 不一定可用）
+HERE = os.path.abspath(os.path.dirname(str(SPEC))) if 'SPEC' in dir() else os.path.abspath(".")
+
 # ── 1. 下载 Windows ffmpeg ──────────────────────────────────
-FFMPEG_DIR = os.path.join(os.path.dirname(__file__), "ffmpeg_win")
-FFMPEG_ZIP = os.path.join(os.path.dirname(__file__), "ffmpeg.zip")
+FFMPEG_DIR = os.path.join(HERE, "ffmpeg_win")
+FFMPEG_ZIP = os.path.join(HERE, "ffmpeg.zip")
 
 if not os.path.exists(os.path.join(FFMPEG_DIR, "bin", "ffmpeg.exe")):
     print("📥 下载 ffmpeg for Windows...")
@@ -52,7 +55,7 @@ if not os.path.exists(os.path.join(FFMPEG_DIR, "bin", "ffmpeg.exe")):
 # ── 2. PyInstaller 配置 ─────────────────────────────────────
 a = Analysis(
     ['launcher.py'],
-    pathex=[os.path.dirname(__file__)],
+    pathex=[HERE],
     binaries=[
         # 只包含 ffmpeg.exe（Windows 下不需要 ffprobe 即可工作）
         (os.path.join(FFMPEG_DIR, 'ffmpeg.exe'), '.'),

@@ -7,3 +7,11 @@ __pycache__/
 build.log
 .DS_Store
 *.log
+
+# Build artifacts
+build/
+dist/
+*.spec
+# ffmpeg download
+ffmpeg_win/
+ffmpeg.zip

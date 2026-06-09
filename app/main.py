@@ -32,7 +32,7 @@ WATCH_FILE = os.path.join(DATA_DIR, "watch_folders.json")
 def load_config():
     global config, translator
     try:
-        with open(CONFIG_FILE) as f: config = json.load(f)
+        with open(CONFIG_FILE, encoding="utf-8") as f: config = json.load(f)
     except Exception:
         config = {"api_key": "", "base_url": "",
                   "model": "deepseek-v4-flash", "context_model": "deepseek-v4-pro",
@@ -43,33 +43,33 @@ def load_config():
 
 def save_config():
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
 
 def load_history():
     global history
     try:
-        with open(HISTORY_FILE) as f: history = json.load(f)
+        with open(HISTORY_FILE, encoding="utf-8") as f: history = json.load(f)
     except Exception:
         history = []
 
 
 def save_history():
-    with open(HISTORY_FILE, "w") as f:
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history[-200:], f, ensure_ascii=False, indent=2)  # keep last 200
 
 
 def load_watch():
     global watch_folders
     try:
-        with open(WATCH_FILE) as f: watch_folders = json.load(f)
+        with open(WATCH_FILE, encoding="utf-8") as f: watch_folders = json.load(f)
     except Exception:
         watch_folders = {}
 
 
 def save_watch():
-    with open(WATCH_FILE, "w") as f:
+    with open(WATCH_FILE, "w", encoding="utf-8") as f:
         json.dump(watch_folders, f, ensure_ascii=False, indent=2)
 
 
@@ -189,7 +189,7 @@ if watch_folders:
 
 @app.get("/")
 async def index():
-    with open(os.path.join(os.path.dirname(__file__), "static", "index.html")) as f:
+    with open(os.path.join(os.path.dirname(__file__), "static", "index.html"), encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 

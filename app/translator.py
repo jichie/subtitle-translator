@@ -21,7 +21,7 @@ class Translator:
         try:
             cache_file = os.path.join(DATA_DIR, "guide_cache.json")
             if os.path.exists(cache_file):
-                with open(cache_file, 'r') as f:
+                with open(cache_file, 'r', encoding='utf-8') as f:
                     Translator._guide_cache = json.load(f)
         except Exception:
             pass
@@ -29,7 +29,7 @@ class Translator:
     def _save_cache(self):
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
-            with open(os.path.join(DATA_DIR, "guide_cache.json"), 'w') as f:
+            with open(os.path.join(DATA_DIR, "guide_cache.json"), 'w', encoding='utf-8') as f:
                 json.dump(Translator._guide_cache, f, ensure_ascii=False)
         except Exception:
             pass
