@@ -26,6 +26,8 @@ DATA_DIR = os.environ.get('SUBTITLE_TRANSLATOR_DATA_DIR') or os.path.join(EXE_DI
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ['DATA_DIR'] = DATA_DIR
 os.environ['VIDEO_MOUNT'] = os.path.abspath(os.path.join(DATA_DIR, '..'))  # 视频目录默认为上级
+# ffmpeg/ffprobe 所在目录（打包后与 exe 同目录提取）
+os.environ['FFMPEG_BIN'] = BASE_DIR
 
 
 def open_browser():

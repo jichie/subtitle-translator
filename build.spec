@@ -37,14 +37,13 @@ if not os.path.exists(os.path.join(FFMPEG_DIR, "bin", "ffmpeg.exe")):
     with zipfile.ZipFile(FFMPEG_ZIP, "r") as z:
         z.extractall(FFMPEG_DIR)
     
-    # 移动 ffmpeg.exe 到根目录
+    # 移动 ffmpeg.exe 和 ffprobe.exe 到根目录
     for root, dirs, files in os.walk(FFMPEG_DIR):
         for f in files:
-            if f == "ffmpeg.exe":
+            if f in ("ffmpeg.exe", "ffprobe.exe"):
                 src = os.path.join(root, f)
-                dst = os.path.join(FFMPEG_DIR, "ffmpeg.exe")
+                dst = os.path.join(FFMPEG_DIR, f)
                 shutil.move(src, dst)
-                break
     
     # 清理
     if os.path.exists(FFMPEG_ZIP):
@@ -57,8 +56,8 @@ a = Analysis(
     ['launcher.py'],
     pathex=[HERE],
     binaries=[
-        # 只包含 ffmpeg.exe（Windows 下不需要 ffprobe 即可工作）
         (os.path.join(FFMPEG_DIR, 'ffmpeg.exe'), '.'),
+        (os.path.join(FFMPEG_DIR, 'ffprobe.exe'), '.'),
     ],
     datas=[
         # 前端静态文件

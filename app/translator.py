@@ -8,6 +8,16 @@ from openai import OpenAI
 VIDEO_ROOT = os.environ.get("VIDEO_MOUNT", "/videos")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
+# ffmpeg/ffprobe 查找路径：优先 FFMPEG_BIN 环境变量，否则靠 PATH
+def _ffmpeg_bin(name: str) -> str:
+    """返回 ffmpeg 或 ffprobe 的完整路径"""
+    bindir = os.environ.get("FFMPEG_BIN")
+    if bindir:
+        full = os.path.join(bindir, name)
+        if os.path.exists(full):
+            return full
+    return name
+
 
 class Translator:
 
@@ -35,7 +45,8 @@ class Translator:
             pass
 
     def list_tracks(self, video_path: str):
-        cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+        ffprobe = _ffmpeg_bin("ffprobe.exe")
+        cmd = [ffprobe, "-v", "quiet", "-print_format", "json",
                "-show_streams", "-select_streams", "s", video_path]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
@@ -45,7 +56,8 @@ class Translator:
                 for s in json.loads(r.stdout).get("streams", [])]
 
     def extract_subtitle(self, video_path: str, stream_index: int, output_path: str) -> bool:
-        cmd = ["ffmpeg", "-y", "-v", "quiet", "-i", video_path,
+        ffmpeg = _ffmpeg_bin("ffmpeg.exe")
+        cmd = [ffmpeg, "-y", "-v", "quiet", "-i", video_path,
                "-map", f"0:{stream_index}", "-c:s", "srt", output_path]
         return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
 
