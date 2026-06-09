@@ -50,38 +50,11 @@ MIT License
 
 ---
 
-## Windows 桌面版（PyInstaller 打包）
-
-### 方法一：下载预构建 exe
+## Windows 桌面版
 
 从 [Releases](https://github.com/jichie/subtitle-translator/releases) 页面下载 `SubtitleTranslator.exe`，双击运行即可。
 
-### 方法二：自行打包
-
-```bash
-# 1. 安装 Python 3.10+
-# 2. 克隆仓库
-git clone https://github.com/jichie/subtitle-translator.git
-cd subtitle-translator
-
-# 3. 安装依赖（Windows 下需要 Visual C++ 编译工具）
-pip install -r requirements.txt
-pip install pyinstaller requests
-
-# 4. 打包（自动下载 ffmpeg）
-python -m PyInstaller build.spec
-
-# 5. 输出在 dist/SubtitleTranslator.exe
-```
-
-### 打包内容
-
-| 组件 | 说明 |
-|------|------|
-| `SubtitleTranslator.exe` | 应用主程序（含 Python 运行时） |
-| `ffmpeg.exe` | 字幕提取工具（内嵌） |
-| `app/static/` | Web 前端界面 |
-| 配置、缓存 | 运行时生成在 exe 同级 `data/` 目录 |
+配置、缓存等运行时数据自动生成在 exe 同级 `data/` 目录下。
 
 ### 系统要求
 
