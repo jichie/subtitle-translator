@@ -941,7 +941,7 @@ async function generateGuideManual(){
   if(gbtn){gbtn.disabled=true;gbtn.textContent='生成中...';gbtn.style.opacity='0.5'}
   try{
     let r=await fetch(API+'/generate_guide',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({path:selVideo,anime_name:detectedAnime})});
+      body:JSON.stringify({path:selVideo,anime_name:detectedAnime,force:true})});
     let d=await r.json();
     if(d.ok){
       showGuidePanel(d.guide, d.cached?'缓存':'新生成');
