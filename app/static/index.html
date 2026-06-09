@@ -866,7 +866,7 @@ async function saveEdits(p){
 function showGuidePanel(guide, label){
   window._currentGuide=guide||'';
   var safeGuide=(guide||'');
-  $('panel-guide').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-size:12px;color:var(--text3)">翻译指南 · ${label}</span><button onclick="editGuide()" style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:11px;cursor:pointer;background:var(--surface2);color:var(--text2)">手动编辑</button></div><div class="guide-box" id="guide-content">${guide.replace(/(\d+)\./g,'<b>$1.</b>').replace(/\n/g,'<br>')}</div>`;
+  $('panel-guide').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-size:12px;color:var(--text3)">翻译指南 · ${label}</span><button onclick="editGuide()" style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:11px;cursor:pointer;background:var(--surface2);color:var(--text2)">手动编辑</button></div><div class="guide-box" id="guide-content">${guide.replace(/(\d+)\./g,'<b>$1.</b>').replace(/\n/g,'<br>')}</div><div id="regen-btn-container" style="margin-top:16px"><button onclick="generateGuideManual()" style="padding:8px 16px;border:1.5px solid var(--accent);border-radius:8px;background:transparent;color:var(--accent);font-size:12px;font-weight:500;cursor:pointer">重新生成指南</button></div>`;
 }
 
 // Load existing guide for detected anime
