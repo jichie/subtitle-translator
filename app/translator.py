@@ -58,10 +58,10 @@ class Translator:
         """去掉句号，保留？！"""
         return re.sub(r'[。.]', '', text)
 
-    def generate_guide(self, anime_name: str, context_model: str, log_fn=None) -> str:
+    def generate_guide(self, anime_name: str, context_model: str, log_fn=None, force=False) -> str:
         """生成翻译指南（同一番剧只生成一次，缓存复用）"""
         # 查缓存
-        if anime_name in Translator._guide_cache:
+        if not force and anime_name in Translator._guide_cache:
             cached = Translator._guide_cache[anime_name]
             if cached and len(cached) > 10:
                 if log_fn: log_fn(f"Cached guide: {len(cached)} chars")

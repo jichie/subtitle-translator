@@ -653,6 +653,7 @@ async def task_cancel(task_id: str):
 class GuideRequest(BaseModel):
     path: str
     anime_name: Optional[str] = None
+    force: bool = False
 
 @app.post("/api/generate_guide")
 async def generate_guide_standalone(req: GuideRequest):
@@ -664,12 +665,12 @@ async def generate_guide_standalone(req: GuideRequest):
     if not anime:
         raise HTTPException(400, "无法识别番剧名，请手动输入")
 
-    # 检查缓存（跳过空内容）
-    if anime in Translator._guide_cache and len(Translator._guide_cache[anime].strip()) > 10:
+    # 检查缓存（跳过空内容），force=True 时强制重新生成
+    if not req.force and anime in Translator._guide_cache and len(Translator._guide_cache[anime].strip()) > 10:
         return {"ok": True, "guide": Translator._guide_cache[anime], "cached": True}
 
     try:
-        guide = translator.generate_guide(anime, config.get("context_model", "deepseek-v4-pro"))
+        guide = translator.generate_guide(anime, config.get("context_model", "deepseek-v4-pro"), force=req.force)
         return {"ok": True, "guide": guide, "cached": False}
     except Exception as e:
         raise HTTPException(500, str(e))
