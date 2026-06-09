@@ -103,7 +103,9 @@ def watch_loop():
                     def make_fn(t):
                         def fn(**kw):
                             if kw.get("check_cancelled"):
-                                return t.get("state") == "cancelled"
+                                return t.get("state") in ("cancelled", "error")
+                            if t.get("state") == "cancelled":
+                                return True
                             for k, v in kw.items():
                                 if k == "log":
                                     t["logs"].append(f"[{t.get('state', '?')}] {v}")
@@ -320,7 +322,10 @@ async def start_translate(req: TranslateRequest):
 
     def update(**kw):
         if kw.get("check_cancelled"):
-            return task.get("state") == "cancelled"
+            return task.get("state") in ("cancelled", "error")
+        # If cancelled, skip all updates and reject
+        if task.get("state") == "cancelled":
+            return True
         for k, v in kw.items():
             if k == "log":
                 task["logs"].append(f"[{task['state']}] {v}")
