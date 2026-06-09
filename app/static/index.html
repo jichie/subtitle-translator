@@ -722,7 +722,11 @@ async function clearHistory(){
 async function stopTranslation(){
   let tid=window._currentTaskId;
   if(!tid){return}
-  try{await fetch(`${API}/task/${tid}/cancel`,{method:'POST'});toast('已请求中断翻译','ok')}catch(e){}
+  try{await fetch(`${API}/task/${tid}/cancel`,{method:'POST'});toast('已请求中断','ok')}catch(e){}
+  if(timer){clearInterval(timer);timer=null;}
+  resetBtn();
+  $('status-dot').className='dot idle';
+  $('log-badge').style.display='none';
 }
 
 // ═══ UTILS ═══
@@ -1004,6 +1008,8 @@ setTimeout(function(){
       if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){
         $('log-badge').style.display='block';
       }
+      // Immediately show task info in tracks
+      $('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">\u68c0\u6d4b\u5230\u6b63\u5728\u8fd0\u884c\u7684\u4efb\u52a1...</span><span class="pct">?</span></div><div class="prog-bar"><div class="prog-fill" style="width:5%"></div></div></div>';
       poll(t.task_id);
     }
   }).catch(function(){});
