@@ -128,7 +128,6 @@ def watch_loop():
             save_watch()
 
 
-
 def _send_webhook(task: dict):
     '''发送翻译完成通知（同步）'''
     url = config.get("webhook_url", "").strip()
@@ -177,8 +176,11 @@ load_watch()
 
 # Start watch thread
 if watch_folders:
-    watch_thread = threading.Thread(target=watch_loop, daemon=True)
-    watch_thread.start()
+    try:
+        watch_thread = threading.Thread(target=watch_loop, daemon=True)
+        watch_thread.start()
+    except Exception as e:
+        pass
 
 
 @app.get("/")
@@ -294,6 +296,7 @@ class TranslateRequest(BaseModel):
     track_index: int = 0
     anime_name: Optional[str] = None
     use_context: Optional[bool] = None
+    videos: Optional[list] = None  # 批量翻译时指定具体视频路径
 
 
 @app.post("/api/translate")
@@ -339,14 +342,28 @@ async def start_translate(req: TranslateRequest):
 
 @app.post("/api/translate_batch")
 async def start_batch(req: TranslateRequest):
-    """翻译整个文件夹"""
+    """翻译文件夹，支持选择性翻译"""
     if not translator: raise HTTPException(400, "请先配置 API")
-    videos = [v for v in scan_videos(req.path) if not os.path.exists(
-        str(Path(v).parent / f"{Path(v).stem}.chi.srt"))]
+    if req.videos:
+        videos = [map_path(v) for v in req.videos if not os.path.exists(
+            str(Path(map_path(v)).parent / f"{Path(map_path(v)).stem}.chi.srt"))]
+    else:
+        videos = [v for v in scan_videos(req.path) if not os.path.exists(
+            str(Path(v).parent / f"{Path(v).stem}.chi.srt"))]
     if not videos:
         return {"message": "没有需要翻译的视频", "tasks": []}
 
     use_ctx = req.use_context if req.use_context is not None else config.get("use_context", False)
+    
+    # Pre-generate guide ONCE for the anime (avoids race condition)
+    anime = req.anime_name or detect_anime_name(videos[0])
+    if anime and anime not in Translator._guide_cache:
+        try:
+            guide = translator.generate_guide(anime, config.get("context_model", "deepseek-v4-pro"))
+            logger.info(f"Batch: guide pre-generated for {anime}")
+        except Exception as e:
+            logger.warning(f"Batch: guide pre-generation failed: {e}")
+    
     tids = []
     for v in videos:
         anime = req.anime_name or detect_anime_name(v)
@@ -429,7 +446,7 @@ async def get_task(task_id: str):
     if not task:
         raise HTTPException(404)
     return {k: task.get(k) for k in
-            ["task_id", "state", "progress", "total", "message",
+            ["task_id", "video", "state", "progress", "total", "message",
              "output", "guide", "logs", "samples"]}
 
 
@@ -511,8 +528,13 @@ async def guide_refine(data: GuideRefineRequest):
     """用户修正字幕后，用V4-Pro分析修正模式，微调翻译指南"""
     if not translator:
         raise HTTPException(400, "请先配置 API")
-    if not data.corrections:
-        raise HTTPException(400, "没有修正数据")
+    
+    # Pure guide save (no corrections) - just update cache
+    if not data.corrections or len(data.corrections) == 0:
+        if data.current_guide.strip():
+            Translator._guide_cache[data.anime_name] = data.current_guide
+            translator._save_cache()
+            return {"ok": True, "guide": data.current_guide, "saved": True}
 
     corrections_text = ""
     for i, c in enumerate(data.corrections[:20]):
@@ -632,8 +654,8 @@ async def generate_guide_standalone(req: GuideRequest):
     if not anime:
         raise HTTPException(400, "无法识别番剧名，请手动输入")
 
-    # 检查缓存
-    if anime in Translator._guide_cache:
+    # 检查缓存（跳过空内容）
+    if anime in Translator._guide_cache and len(Translator._guide_cache[anime].strip()) > 10:
         return {"ok": True, "guide": Translator._guide_cache[anime], "cached": True}
 
     try:

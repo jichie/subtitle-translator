@@ -172,9 +172,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh
 .modal .msg{font-size:12px;color:var(--green);margin-top:10px;font-weight:500}
 /* Batch */
 .batch-list{max-height:300px;overflow-y:auto;margin-top:14px}
-.batch-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+.batch-row{display:grid;grid-template-columns:28px 1fr auto;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);font-size:12.5px;align-items:center}
 .batch-row:last-child{border-bottom:none}
-.batch-row .name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.batch-row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;width:100%}
+.batch-row input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);margin:0}
 .batch-row .state{font-size:10px;padding:4px 12px;border-radius:20px;font-weight:600}
 .batch-row .state.wait{background:var(--yellow-bg);color:var(--yellow)}
 .batch-row .state.done{background:var(--green-bg);color:var(--green)}
@@ -282,7 +283,6 @@ body.light ::selection{background:var(--accent);color:#fff}
 <div class="tabs">
 <div class="tab active" data-tab="tracks" onclick="switchTab('tracks')">字幕轨</div>
 <div class="tab" data-tab="guide" onclick="switchTab('guide')">指南</div>
-<div class="tab" data-tab="logs" onclick="switchTab('logs')">日志<span class="badge" id="log-badge" style="display:none"></span></div>
 <div class="tab" data-tab="samples" onclick="switchTab('samples')">样例</div>
 <div class="tab" data-tab="history" onclick="switchTab('history')">历史</div>
 <div class="tab" data-tab="watch" onclick="switchTab('watch')">订阅</div>
@@ -290,7 +290,7 @@ body.light ::selection{background:var(--accent);color:#fff}
 <div class="content">
 <div class="panel active" id="panel-tracks"><div class="empty"><div class="icon-box"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg></div><h3>选择视频文件</h3><p>在左侧浏览目录或输入路径</p></div></div>
 <div class="panel" id="panel-guide"><div class="empty"><div class="icon-box"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/></svg></div><h3>翻译指南</h3><p id="guide-empty-msg">选择视频后可手动生成指南</p><button id="btn-gen-guide" onclick="generateGuideManual()" style="display:none;margin-top:16px;padding:10px 24px;border:1.5px solid var(--accent);border-radius:var(--radius);font-family:var(--font);font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">生成指南</button></div></div>
-<div class="panel" id="panel-logs"><div class="empty"><div class="icon-box"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div><h3>翻译日志</h3><p>实时显示翻译进度</p></div></div>
+
 <div class="panel" id="panel-samples"><div class="empty"><div class="icon-box">✨</div><h3>翻译样例</h3><p>翻译完成后展示质量对比</p></div></div>
 <div class="panel" id="panel-history"><div class="empty"><div class="icon-box"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><h3>翻译历史</h3><p>暂无记录</p></div></div>
 <div class="panel" id="panel-watch"><div class="empty"><div class="icon-box"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></div><h3>订阅文件夹</h3><p>自动检测新集数并翻译</p></div></div>
@@ -388,6 +388,8 @@ async function loadPath(){let p=$('path-inp').value.trim();if(!p)return;if(p.mat
 
 // ═══ TRACKS ═══
 async function loadTracks(p){selVideo=p;selTrack=null;
+  window._currentGuide='';window._guideShown=false;
+  $('panel-guide').innerHTML='<div class="empty"><div class="icon-box">...</div><h3>翻译指南</h3><p>选择视频后可手动生成指南</p><button id="btn-gen-guide" onclick="generateGuideManual()" style="margin-top:16px;padding:10px 24px;border:1.5px solid var(--accent);border-radius:var(--radius);font-family:var(--font);font-size:13px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">生成指南</button></div>';
 try{let r=await fetch(`${API}/tracks?path=${encodeURIComponent(p)}`);
 if(!r.ok){let e=await r.json().catch(()=>({}));$('panel-tracks').innerHTML=`<div class="empty"><div class="icon-box">❌</div><h3>错误</h3><p>${esc(e.detail||`HTTP ${r.status}`)}</p></div>`;if(r.status===400)openSettings();return}
 let d=await r.json();detectedAnime=d.anime_name;$('main-title').textContent=d.filename;
@@ -400,7 +402,8 @@ if(detectedAnime){
 if(!d.tracks.length){$('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">⚠️</div><h3>无字幕轨</h3><p>未找到任何字幕轨</p></div>';return}
 let eng=d.tracks.filter(t=>['eng','en','en-US','en-GB'].includes(t.language));
 let h='<div class="track-list">';for(let t of d.tracks){let isE=eng.includes(t);h+=`<div class="track-card${isE&&!selTrack?' sel':''}" onclick="pickTrack(${t.index})"><span class="lang">${t.language}</span><span class="title">${esc(t.title||'(无标题)')}${isE?' ⭐推荐':''}</span><span class="idx">#${t.index}</span></div>`;}h+='</div>';
-$('panel-tracks').innerHTML=h;if(eng.length)selTrack=eng[0].index;else if(d.tracks.length)selTrack=d.tracks[0].index;switchTab('tracks')}catch(e){$('panel-tracks').innerHTML=`<div class="empty"><div class="icon-box">❌</div><h3>错误</h3><p>${esc(e.message)}</p></div>`}}
+$('panel-tracks').innerHTML=h;
+      if(eng.length)selTrack=eng[0].index;else if(d.tracks.length)selTrack=d.tracks[0].index;switchTab('tracks')}catch(e){$('panel-tracks').innerHTML=`<div class="empty"><div class="icon-box">❌</div><h3>错误</h3><p>${esc(e.message)}</p></div>`}}
 function pickTrack(i){selTrack=i;document.querySelectorAll('.track-card').forEach(c=>{c.classList.toggle('sel',c.querySelector('.idx')?.textContent.includes('#'+i))})}
 
 // ═══ TRANSLATE ═══
@@ -409,10 +412,10 @@ async function startTranslate(){
   if(window._currentTaskId && timer){ stopTranslation(); return; }
   if(!selVideo||selTrack==null){toast('请先选择视频和字幕轨','err');return}
   window._guideShown=false;
-  $('panel-logs').innerHTML='<div class="log-box" id="log-box"></div>';
+  $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">...</div><p>开始翻译...</p></div>';
   $('panel-guide').innerHTML='<div class="empty"><div class="icon-box">...</div><p>等待分析...</p></div>';
   $('panel-samples').innerHTML='<div class="empty"><div class="icon-box">...</div><p>等待翻译...</p></div>';
-  switchTab('logs');
+  switchTab('tracks');
   $('status-dot').className='dot active';
   $('btn-start').textContent='■ 停止';
   $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
@@ -424,10 +427,16 @@ let d=await r.json();window._currentTaskId=d.task_id;poll(d.task_id)}catch(e){to
 
 function poll(tid){if(timer)clearInterval(timer);
 timer=setInterval(async()=>{try{let r=await fetch(`${API}/task/${tid}`);let t=await r.json();
-let pct=t.total?Math.round(t.progress/t.total*100):0;
-$('panel-tracks').innerHTML=`<div class="prog-wrap"><div class="prog-head"><span class="label">${esc(t.message)}</span><span class="pct">${pct}%</span></div><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div></div>`;
-if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){$('log-badge').style.display='block'}
-if(t.logs?.length){let h=t.logs.map(l=>{let c='';if(l.includes('[error]'))c=' err';else if(l.includes('Complete')||l.includes('Saved')||l.includes('done')||l.includes('Cached'))c=' ok';return`<div class="log-entry${c}">${esc(l)}</div>`}).join('');$('panel-logs').innerHTML=`<div class="log-box" id="log-box">${h}</div>`;let b=$('log-box');if(b)b.scrollTop=b.scrollHeight}
+var pct=t.total?Math.round(t.progress/t.total*100):0;
+      // Build combined HTML: progress + logs
+      var combined='<div class="prog-wrap"><div class="prog-head"><span class="label">'+esc(t.message)+'</span><span class="pct">'+pct+'%</span></div><div class="prog-bar"><div class="prog-fill" style="width:'+pct+'%"></div></div></div>';
+      if(t.logs&&t.logs.length){
+        var lh='';
+        t.logs.forEach(function(l){var c='';if(l.indexOf('[error]')>=0)c=' err';else if(l.indexOf('Complete')>=0||l.indexOf('Saved')>=0||l.indexOf('done')>=0||l.indexOf('Cached')>=0)c=' ok';lh+='<div class="log-entry'+c+'">'+esc(l)+'</div>';});
+        combined+='<div class="log-box" style="max-height:300px;margin-top:12px">'+lh+'</div>';
+      }
+      $('panel-tracks').innerHTML=combined;
+      if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){$('log-badge').style.display='block'}
 if(t.guide){$('panel-guide').innerHTML=`<div class="guide-box">${t.guide.replace(/(\d+)\./g,'<b>$1.</b>').replace(/\n/g,'<br>')}</div>`;if(!window._guideShown){window._guideShown=true;switchTab('guide')}}
 if(t.samples?.length){
   window._origSamples = JSON.parse(JSON.stringify(t.samples));
@@ -499,22 +508,194 @@ try{let r=await fetch(`${API}/config`,{method:'POST',headers:{'Content-Type':'ap
 // ═══ BATCH ═══
 function openBatch(){$('batch-modal').classList.add('show');$('batch-path').value=selVideo?selVideo.replace(/[^/]+$/,''):curPath}
 function closeBatch(){$('batch-modal').classList.remove('show')}
+function batchSelectAll(){document.querySelectorAll('.batch-cb').forEach(function(c){c.checked=true;});}
+function batchDeselectAll(){document.querySelectorAll('.batch-cb').forEach(function(c){c.checked=false;});}
+function batchToggle(){document.querySelectorAll('.batch-cb').forEach(function(c){c.checked=!c.checked;});}
 async function scanBatch(){let p=$('batch-path').value.trim();if(!p)return;
 $('batch-list').innerHTML='扫描中...';$('batch-go').disabled=true;
 try{let r=await fetch(`${API}/scan_folder?path=${encodeURIComponent(p)}`);let d=await r.json();
-let h=`<div style="font-size:12px;color:var(--text3);margin-bottom:8px">共 ${d.total} 个视频，已翻译 ${d.translated} 个</div>`;
-for(let v of d.videos){h+=`<div class="batch-row"><span class="name">${esc(v.name)}</span><span class="state ${v.translated?'done':'wait'}">${v.translated?'已翻译':'待翻译'}</span></div>`}
-$('batch-list').innerHTML=h;$('batch-go').disabled=d.total===d.translated;$('batch-msg').textContent=''}catch(e){$('batch-list').innerHTML='扫描失败'}}
+var un=d.videos.filter(function(v){return !v.translated;}).length;
+var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:12px;color:var(--text3)">共 '+d.total+' 个，'+un+' 个待翻译</span><div style="display:flex;gap:4px"><button onclick="batchSelectAll()" style="padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-size:10px;cursor:pointer;background:var(--surface2);color:var(--text2)">全选</button><button onclick="batchDeselectAll()" style="padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-size:10px;cursor:pointer;background:var(--surface2);color:var(--text2)">取消</button><button onclick="batchToggle()" style="padding:3px 8px;border:1px solid var(--border);border-radius:4px;font-size:10px;cursor:pointer;background:var(--surface2);color:var(--text2)">反选</button></div></div>';
+d.videos.forEach(function(v){h+='<div class="batch-row"><input type="checkbox" class="batch-cb" data-path="'+esc(v.path)+'" '+(v.translated?'':'checked')+'><span class="name">'+esc(v.name)+'</span><span class="state '+(v.translated?'done':'wait')+'">'+(v.translated?'已翻译':'待翻译')+'</span></div>';});
+$('batch-list').innerHTML=h;$('batch-go').disabled=!un;$('batch-msg').textContent='';
+// Set detected anime from batch path
+var firstVid = d.videos[0];
+if(firstVid){
+  detectedAnime = firstVid.anime || '';
+  // Extract anime name from path (parent of Season dir)
+  var parts = firstVid.path.split('/');
+  for(var pi=0; pi<parts.length-1; pi++){
+    if(/^Season|^S\d+/i.test(parts[pi])){
+      detectedAnime = parts[pi-1];
+      break;
+    }
+  }
+  if(detectedAnime) $('main-sub').textContent = '批量翻译 '+(un)+' 个 · '+detectedAnime;
+}
+// Load track info
+var firstUntrans = d.videos.find(function(v){return !v.translated;});
+if(firstUntrans){
+  fetch(API+'/tracks?path='+encodeURIComponent(firstUntrans.path)).then(function(tr){return tr.json();}).then(function(td){
+    var eng = td.tracks.filter(function(t){return ['eng','en','en-US','en-GB'].indexOf(t.language)>=0;});
+    var sel = (eng.length?eng[0]:td.tracks[0])||{};
+    window._batchTrackIdx = sel.index||0;
+    var trackInfo='已选: <b>'+(sel.language||'').toUpperCase()+'</b> 轨 #'+sel.index;
+    document.getElementById('batch-track-selector').innerHTML=trackInfo+' <input type="number" id="batch-track-input" value="'+sel.index+'" min="0" max="20" style="width:50px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;font-size:11px;background:var(--surface2);color:var(--text)"> <span style="font-size:10px;color:var(--t3)">可手动修改</span>';
+  }).catch(function(e){document.getElementById('batch-track-selector').innerHTML='获取失败';});
+}}catch(e){$('batch-list').innerHTML='扫描失败'}}
 async function startBatch(){let p=$('batch-path').value.trim();if(!p)return;
+var cbs=document.querySelectorAll('.batch-cb:checked');
+if(!cbs.length){toast('请至少选择一个视频','err');return}
+var paths=[];cbs.forEach(function(cb){paths.push(cb.dataset.path);});
 $('batch-go').disabled=true;$('batch-go').textContent='提交中...';
-try{let r=await fetch(`${API}/translate_batch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});let d=await r.json();$('batch-msg').textContent=d.message;toast(d.message,'ok');closeBatch()}catch(e){$('batch-go').disabled=false;$('batch-go').textContent='开始批量翻译'}}
+window._batchPaths=paths;
+var trackInput=document.getElementById('batch-track-input');var trackIdx=trackInput?parseInt(trackInput.value):(window._batchTrackIdx||0);
+try{let r=await fetch(`${API}/translate_batch`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,videos:paths,track_index:trackIdx})});let d=await r.json();$('batch-msg').textContent=d.message;toast(d.message,'ok');closeBatch();
+// Start polling batch progress
+$('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">批量任务已启动...</span><span class="pct">0%</span></div><div class="prog-bar"><div class="prog-fill" style="width:0%"></div></div></div>';
+switchTab('tracks');$('status-dot').className='dot active';
+pollBatchTasks(d.tasks||[]);}catch(e){$('batch-go').disabled=false;$('batch-go').textContent='开始批量翻译'}}
 
+// ═══ BATCH POLL ═══
+async function pollBatchTasks(tids){
+  if(!tids || !tids.length){$('log-badge').style.display='none';return;}
+  window._batchTids=tids;
+  var pollId = setInterval(async function(){window._batchPollId=pollId;
+    try{
+      var done=0,err=0,total=tids.length,rows='',logs=[],progP=0,progT=0;function progPush(p,t){progP+=p;progT+=t;}
+      for(var i=0;i<tids.length;i++){
+        try{
+          var tr=await fetch(API+'/task/'+tids[i]);
+          if(!tr.ok)continue;
+          var task=await tr.json();
+          if(task.state==='done')done++;var taskOut=task.output||'';
+          if(task.state==='error')err++;
+          var p=task.progress||0;var t=task.total||0;if(p>0&&t>0)progPush(p,t);
+          var name=(task.video||'').split('/').pop()||'task'+i;
+          var icon=task.state==='done'?'✓':task.state==='error'?'✗':task.state==='translating'?'►':task.state==='cancelled'?'■':'?';
+          var color=task.state==='done'?'color:var(--green)':task.state==='error'?'color:var(--red)':task.state==='cancelled'?'color:var(--yellow)':'color:var(--text2)';
+          rows+='<div style="font-size:11px;padding:4px 0;'+color+'"><span style="margin-right:8px">'+icon+'</span><span'+(task.output?' onclick="openHistoryEditor(\''+esc(task.output)+'\',\''+esc(name)+'\')" style="cursor:pointer;text-decoration:underline"':'')+'>'+esc(name)+'</span></div>';
+          if(task.logs){for(var li=0;li<task.logs.length;li++){logs.push(task.logs[li]);}}
+          if((!task.logs||!task.logs.length)&&task.message&&task.message!=='Queued...'){
+            logs.push('[msg] '+task.message);
+          }        }catch(e){}
+      }
+      var allDone=(done+err>=total);
+      var pct=(progT>0?Math.round(progP/progT*100):(total>0?Math.round((done+err)/total*100):0));
+      
+      // Tracks: progress + task list
+      $('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">批量翻译 '+(done+err)+'/'+total+' ('+done+'完成 '+err+'失败)'+(allDone?'':'<button onclick="stopBatchTasks()" style="padding:2px 8px;border:1px solid var(--red);border-radius:4px;font-size:10px;cursor:pointer;background:transparent;color:var(--red);margin-left:8px">停</button>')+'</span><span class="pct">'+pct+'%</span></div><div class="prog-bar"><div class="prog-fill" style="width:'+pct+'%"></div></div></div>'+rows;
+      
+      // Logs appended to tracks
+      var logHtml='<div class="log-box" style="max-height:300px;margin-top:12px">';
+      if(logs.length==0) logHtml+='<div class="log-entry">任务进行中...</div>';
+      for(var li=0;li<logs.length&&li<200;li++){
+        var l=logs[li];
+        var cls='';
+        if(l.indexOf('[error]')>=0)cls=' err';
+        else if(l.indexOf('Complete')>=0||l.indexOf('Saved')>=0||l.indexOf('done')>=0)cls=' ok';
+        logHtml+='<div class="log-entry'+cls+'">'+esc(l)+'</div>';
+      }
+      logHtml+='</div>';
+      // Append to tracks (after progress)
+      var existingLog=document.querySelector('#panel-tracks .log-box');
+      if(existingLog)existingLog.outerHTML=logHtml;
+      else document.getElementById('panel-tracks').insertAdjacentHTML('beforeend',logHtml);
+      
+      // Guide
+      if(detectedAnime)loadExistingGuide(detectedAnime);
+      
+      if(allDone){
+        clearInterval(pollId);
+        $('log-badge').style.display='none';$('status-dot').className='dot idle';
+        // Samples: completed list
+        var samplesHtml='';
+        if(rows) samplesHtml='<div style="margin-bottom:12px"><span style="font-size:13px;color:var(--text2)">已完成 '+done+'/'+total+'</span></div>'+rows;
+        $('panel-samples').innerHTML=samplesHtml;
+        toast('批量完成: '+done+'/'+total,'ok');loadHistory();
+      }
+    }catch(e){}
+  },3000);
+}
+async function stopBatchTasks(){
+  var tids=window._batchTids||[];
+  if(!tids.length){toast('没有可取消的任务','err');return;}
+  var count=0;
+  for(var i=0;i<tids.length;i++){
+    try{
+      var r=await fetch(API+'/task/'+tids[i]+'/cancel',{method:'POST'});
+      if(r.ok)count++;
+    }catch(e){}
+  }
+  toast('已请求取消 '+count+' 个任务','ok');
+  clearInterval(window._batchPollId||0);
+  $('log-badge').style.display='none';$('status-dot').className='dot idle';
+}
 // ═══ WATCH ═══
 async function loadWatch(){try{let r=await fetch(`${API}/watch`);let d=await r.json();let fs=d.folders||{};
 if(!Object.keys(fs).length){$('panel-watch').innerHTML='<div class="empty"><div class="icon-box">🔔</div><h3>订阅文件夹</h3><p>自动翻译新集数<br><small>进入文件夹后点击下方按钮添加</small></p><button class="primary" style="margin-top:16px;padding:10px 20px;border:none;border-radius:var(--radius-sm);font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer" onclick="addWatch()">添加订阅</button></div>';return}
 let h='<div style="margin-bottom:12px"><button class="primary" style="padding:8px 16px;border:none;border-radius:var(--radius-sm);font-family:var(--font);font-size:11px;font-weight:500;cursor:pointer" onclick="addWatch()">添加订阅</button></div>';
 for(let [p,i] of Object.entries(fs)){h+=`<div class="watch-item"><span class="path">${esc(p)}</span><span class="status">${i.enabled?'启用中':'已暂停'}</span><button onclick="toggleWatch('${p}')">${i.enabled?'暂停':'启用'}</button><button class="danger" onclick="removeWatch('${p}')">删除</button></div>`}
-$('panel-watch').innerHTML=h}catch(e){$('panel-watch').innerHTML='<div class="empty"><div class="icon-box">❌</div><h3>错误</h3><p>加载失败</p></div>'}}
+$('panel-watch').innerHTML=h;
+  // Check for active watch tasks
+  try{
+    var atr = await fetch(API+'/tasks_active');
+    var atd = await atr.json();
+    var watchTasks = (atd.tasks||[]).filter(function(t){var subFolder=Object.keys(window._subFolders||{}).find(function(k){return t.video?t.video.indexOf(k.replace(/\/1000/,'/videos/1000'))>=0:false;});return subFolder?true:false;});
+    if(watchTasks.length){
+      var wtHtml='<div style="margin-top:16px"><div style="font-size:12px;font-weight:500;color:var(--accent);margin-bottom:8px">▶ 订阅任务运行中</div>';
+      watchTasks.forEach(function(t){
+        var pct = t.total>0?Math.round(t.progress/t.total*100):0;
+        wtHtml+='<div class="watch-item" onclick="trackTaskProgress(\''+t.task_id+'\')" style="cursor:pointer"><span class="path">'+(t.video||'').split('/').pop()+'</span><span class="status" style="color:var(--accent)">'+pct+'%</span></div>';
+      });
+      wtHtml+='</div>';
+      $('panel-watch').insertAdjacentHTML('beforeend', wtHtml);
+    }
+  }catch(e){}
+  // Start tracking the first watch task automatically
+  if(watchTasks.length && !window._watchTaskPolling){
+    window._watchTaskPolling=true;
+    trackTaskProgress(watchTasks[0].task_id);
+  }
+}catch(e){$('panel-watch').innerHTML='<div class="empty"><div class="icon-box">❌</div><h3>错误</h3><p>加载失败</p></div>'}}
+
+// ═══ WATCH TASK PROGRESS ═══
+var _watchProgressTimer=null;
+function trackTaskProgress(taskId){
+  if(!taskId)return;
+  if(_watchProgressTimer){clearInterval(_watchProgressTimer);_watchProgressTimer=null;}
+  switchTab('tracks');
+  $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">...</div><h3>加载中...</h3></div>';
+  _watchProgressTimer=setInterval(async function(){
+    try{
+      var r=await fetch(API+'/task/'+taskId);
+      if(!r.ok){clearInterval(_watchProgressTimer);_watchProgressTimer=null;
+        $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">❌</div><h3>任务已结束</h3></div>';
+        $('panel-logs').innerHTML='<div class="empty"><div class="icon-box">❌</div><h3>日志已结束</h3></div>';
+        return;}
+      var t=await r.json();
+      var pct=t.total>0?Math.round(t.progress/t.total*100):0;
+      // Tracks: progress only
+      $('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">'+(t.message||'')+'</span><span class="pct">'+pct+'%</span></div><div class="prog-bar"><div class="prog-fill" style="width:'+pct+'%"></div></div></div>';
+      // Logs: append to tracks
+      if(t.logs&&t.logs.length){
+        var lh='<div class="log-box" style="max-height:300px;margin-top:12px">';
+        (t.logs.slice(-100)).forEach(function(l){
+          var cls=l.indexOf('[error]')>=0?' err':(l.indexOf('Complete')>=0||l.indexOf('Saved')>=0||l.indexOf('done')>=0)?' ok':'';
+          lh+='<div class="log-entry'+cls+'">'+esc(l)+'</div>';
+        });
+        lh+='</div>';
+        var existingLog=document.querySelector('#panel-tracks .log-box');
+        if(existingLog)existingLog.outerHTML=lh;
+        else document.getElementById('panel-tracks').insertAdjacentHTML('beforeend',lh);
+      }
+      if(t.state==='done'||t.state==='error'||t.state==='cancelled'){
+        clearInterval(_watchProgressTimer);_watchProgressTimer=null;
+        if(t.state==='done')toast('已完成','ok');
+      }
+    }catch(e){}
+  },2000);
+}
 async function addWatch(){let p=curPath;if(p==='/'){toast('请先进入具体文件夹','err');return}
 try{await fetch(`${API}/watch/add?path=${encodeURIComponent(p)}`,{method:'POST'});toast('已订阅: '+p,'ok');loadWatch()}catch(e){}}
 async function removeWatch(p){await fetch(`${API}/watch/remove?path=${encodeURIComponent(p)}`,{method:'POST'});loadWatch()}
@@ -589,12 +770,22 @@ async function openHistoryEditor(path, name){
   switchTab('samples');
   $('panel-samples').innerHTML='<div class="empty"><div class="icon-box">...</div><h3>加载字幕...</h3></div>';
   try{
+    // Load both .chi.srt and .eng.srt
+    var enEntries=[];
+    var engPath=path;
+    if(engPath.endsWith('.chi.srt')){engPath=engPath.slice(0,-8)+'.eng.srt';}
+    else if(engPath.endsWith('.srt')&&!engPath.endsWith('.eng.srt')){engPath=engPath.slice(0,-4)+'.eng.srt';}
+    try{
+      var enResp=await fetch(API+'/subtitle_read?path='+encodeURIComponent(engPath));
+      if(enResp.ok){var enData=await enResp.json();enEntries=enData.entries||[];}
+    }catch(e){}
+
     let r=await fetch(`${API}/subtitle_read?path=${encodeURIComponent(path)}`);
     let d=await r.json();
     if(!d.entries){toast('读取失败','err');return}
     detectedAnime = name || detectedAnime;
     window._outPath = path;
-    // Build editor
+    // Build editor with EN on left, ZH input on right
     let h=`<div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:13px;color:var(--text2)">${esc(name)} · ${d.total}条字幕</span>
       <div style="display:flex;gap:8px">
@@ -603,12 +794,15 @@ async function openHistoryEditor(path, name){
       </div>
     </div>`;
     h+=`<div class="samples-grid" style="grid-template-columns:1fr">`;
-    window._origSamples = d.entries.map(e=>({index:e.index,en:'',zh:e.text}));
-    d.entries.forEach((e,i)=>{
+    window._origSamples = d.entries.map(function(e,i){
+      var en=enEntries[i]?enEntries[i].text:e.text;
+      return {index:i,en:en,zh:e.text};
+    });
+    d.entries.forEach(function(e,i){
+      var en=(enEntries[i]?esc(enEntries[i].text):'(原英文未找到)');
       h+=`<div class="sample-card" style="padding:12px 16px;display:flex;align-items:center;gap:12px">
-        <div style="min-width:32px;font-size:11px;color:var(--text4);text-align:right">${i}</div>
-        <div style="flex:1;font-size:12px;color:var(--text3);line-height:1.6">${esc(e.text)}</div>
-        <div style="flex:1"><input type="text" class="edit-input" data-idx="${i}" value="${esc(e.text)}" style="width:100%;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);font-family:var(--font);outline:none;transition:border-color .15s" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></div>
+        <div style="font-size:11px;color:var(--text3);line-height:1.6;flex:1">${en}</div>
+        <div style="flex:1"><input type="text" class="edit-input" data-idx="${i}" value="${esc(e.text)}" style="width:100%;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text);font-family:var(--font);outline:none" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></div>
       </div>`;
     });
     h+=`</div>`;
@@ -670,16 +864,18 @@ async function saveEdits(p){
 
 // Show guide panel content
 function showGuidePanel(guide, label){
-  window._currentGuide=guide;
+  window._currentGuide=guide||'';
+  var safeGuide=(guide||'');
   $('panel-guide').innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-size:12px;color:var(--text3)">翻译指南 · ${label}</span><button onclick="editGuide()" style="padding:5px 12px;border:1px solid var(--border);border-radius:6px;font-size:11px;cursor:pointer;background:var(--surface2);color:var(--text2)">手动编辑</button></div><div class="guide-box" id="guide-content">${guide.replace(/(\d+)\./g,'<b>$1.</b>').replace(/\n/g,'<br>')}</div>`;
 }
 
 // Load existing guide for detected anime
 async function loadExistingGuide(animeName){
+  window._guideLoading=false;
   if(!animeName)return;
   try{
     let r=await fetch(API+'/generate_guide',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({path:selVideo,anime_name:animeName})});
+      body:JSON.stringify({path:selVideo||curPath,anime_name:animeName})});
     let d=await r.json();
     if(d.ok && d.cached){
       showGuidePanel(d.guide, '已缓存');
@@ -692,27 +888,31 @@ async function loadExistingGuide(animeName){
       $('guide-empty-msg').textContent='检测到番剧: '+animeName;
     }
     // Also load all cached guides for the selector
-    loadCachedGuideList();
+  loadCachedGuideList();
   }catch(e){}
 }
 
 // Load list of all cached guides
-async function loadCachedGuideList(){
-  try{
-    let r=await fetch(API+'/guide_cache_list');
-    let d=await r.json();
-    if(d.guides && d.guides.length>0){
-      let list=`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><span style="font-size:11px;color:var(--text4);display:block;margin-bottom:8px">已缓存的番剧指南</span>`;
-      d.guides.forEach(g=>{
-        let sel=g===detectedAnime?' style="color:var(--accent);font-weight:500"':'';
-        list+=`<div${sel} onclick="loadExistingGuide('${esc(g)}')" style="padding:6px 0;font-size:12px;cursor:pointer;color:var(--text2);transition:color .15s" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color=''">${esc(g)}</div>`;
-      });
-      list+=`</div>`;
-      let panel=$('panel-guide');
-      if(panel)panel.innerHTML+=list;
-    }
-  }catch(e){}
+async function loadCachedGuideList() {
+  if(detectedAnime && !document.getElementById('guide-content') && !window._guideLoading){
+    window._guideLoading=true;
+    loadExistingGuide(detectedAnime);
+  }
+  showRegenerateButton();
 }
+function showRegenerateButton(){
+  // Add regenerate button below guide-content
+  var existing = document.getElementById('regen-btn-container');
+  if(existing) existing.remove();
+  var gc = document.getElementById('guide-content');
+  if(!gc) return;
+  var btn = document.createElement('div');
+  btn.id = 'regen-btn-container';
+  btn.style.marginTop = '16px';
+  btn.innerHTML = '<button onclick="generateGuideManual()" style="padding:8px 16px;border:1.5px solid var(--accent);border-radius:8px;font-family:var(--font);font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">重新生成指南</button>';
+  gc.parentNode.insertBefore(btn, gc.nextSibling);
+}
+
 
 // Manual guide generation
 async function generateGuideManual(){

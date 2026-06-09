@@ -63,8 +63,11 @@ class Translator:
         # 查缓存
         if anime_name in Translator._guide_cache:
             cached = Translator._guide_cache[anime_name]
-            if log_fn: log_fn(f"Cached guide: {len(cached)} chars")
-            return cached
+            if cached and len(cached) > 10:
+                if log_fn: log_fn(f"Cached guide: {len(cached)} chars")
+                return cached
+            else:
+                if log_fn: log_fn(f"Skipping empty cache ({len(cached)} chars), regenerating...")
 
         prompt = (
             f"为番剧《{anime_name}》生成翻译风格指南。直接输出指南内容。\n"
@@ -75,7 +78,8 @@ class Translator:
             if log_fn: log_fn(f"Calling {context_model}...")
             r = self.client.chat.completions.create(
                 model=context_model, messages=[{"role": "user", "content": prompt}],
-                temperature=0.4, max_tokens=4000)
+                temperature=0.4, max_tokens=4000,
+                extra_body={"enable_thinking": False})
             guide = r.choices[0].message.content.strip()
             Translator._guide_cache[anime_name] = guide
             self._save_cache()
@@ -105,10 +109,10 @@ class Translator:
             else:
                 inp_lines.append("[CTX] (scene continues)")
             inp = "\n".join(inp_lines)
-            note = "\nContext (CTX) is reference only. Translate [0]-[N] lines with dialogue consistency. Remove periods."
+            note = "\nIMPORTANT: Only output lines for [0]-[N]. NEVER include [CTX] markers in your response. Follow the translation guide strictly for tone, terminology, and character voice. Remove periods (。) from translations."
         else:
             inp = "\n".join(f"[{i}] {t}" if t.strip() else f"[{i}] " for i, t in enumerate(texts))
-            note = "\nRemove periods (。) from translations. Keep ? and !."
+            note = "\nFollow the translation guide above for tone, terminology, and character voice. Remove periods (。) from translations. Keep ? and !."
 
         full_prompt = sys_prompt + note
 
@@ -138,6 +142,8 @@ class Translator:
                 for i in range(n):
                     if trans[i]:
                         trans[i] = self._clean_punct(trans[i])
+                        # Remove any CTX markers that leaked into translation
+                        trans[i] = re.sub(r'\[CTX[^\]]*\]', '', trans[i]).strip()
                 missing = sum(1 for i, t in enumerate(trans) if not t and texts[i].strip())
                 if missing > 0 and attempt < 2:
                     if log_fn: log_fn(f"Missing {missing} items, retry (attempt {attempt+2})...")
@@ -253,15 +259,17 @@ class Translator:
             return out_srt
 
         except Exception as e:
-            for f in [eng_srt, out_srt]:
+            # Only remove incomplete output, keep eng_srt for re-translation
+            for f in [out_srt]:
                 try:
                     if os.path.exists(f): os.remove(f); log(f"Cleaned up: {Path(f).name}")
                 except Exception: pass
             raise
-        finally:
-            try:
-                if os.path.exists(eng_srt): os.remove(eng_srt)
-            except Exception: pass
+        # finally:
+        #     Keep .eng.srt for guide refinement
+        #     try:
+        #         if os.path.exists(eng_srt): os.remove(eng_srt)
+        #     except Exception: pass
 
 
 def detect_anime_name(video_path: str) -> Optional[str]:
