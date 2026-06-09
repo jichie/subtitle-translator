@@ -989,6 +989,25 @@ function updateThemeIcons(dark){
 
 // ═══ INIT ═══
 browse('/');$('status-dot').className='dot idle';
+// Auto-recover running tasks after page refresh
+setTimeout(function(){
+  fetch(API+'/tasks_active').then(function(r){return r.json();}).then(function(d){
+    var tasks=d.tasks||[];
+    if(tasks.length){
+      // Recover tracking of first active task
+      var t=tasks[0];
+      window._currentTaskId=t.task_id;
+      window._translating=true;
+      $('status-dot').className='dot active';
+      $('btn-start').textContent='■ 停止';
+      $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
+      if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){
+        $('log-badge').style.display='block';
+      }
+      poll(t.task_id);
+    }
+  }).catch(function(){});
+},500);
 // Load theme preference
 let savedTheme=localStorage.getItem('theme')||'dark';
 setTheme(savedTheme==='light'?false:true);

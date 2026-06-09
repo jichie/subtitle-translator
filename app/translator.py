@@ -159,6 +159,9 @@ class Translator:
     def run_translation(self, video_path, track_index, anime_name, model,
                         context_model, batch_size, use_context, update_fn) -> str:
         def log(msg): update_fn(log=msg)
+        # Cancellation check helper
+        def is_cancelled():
+            return update_fn(check_cancelled=True)
 
         base = Path(video_path).stem
         parent = Path(video_path).parent
@@ -203,6 +206,15 @@ class Translator:
             translated = []
             t_start = time.time()
             for i in range(0, total, batch_size):
+                # Check for cancellation before each batch
+                try:
+                    if update_fn(check_cancelled=True):
+                        log("Translation cancelled by user")
+                        raise RuntimeError("翻译已取消")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
                 chunk = clean[i:i + batch_size]
                 log(f"Batch {i // batch_size + 1}/{nbatch} ({len(chunk)} lines)")
                 # 真实上下文：前后各2条
