@@ -320,10 +320,14 @@ def detect_anime_name(video_path: str) -> Optional[str]:
         parent = parts[-2]
         stripped = re.sub(r'[\s_.-]*(?:S\d+E\d+|E\d+|4K\b|\d+[vV]\d*|\d{2,}(?![a-zA-Z])|1080[pP]|720[pP]|\d+[集話話]?|\bHD\b)[\s_.-]*', '', filename).strip()
         if len(stripped) > 1 and len(parent) > 1:
-            # Fuzzy match: count common characters
             common = sum(1 for c in stripped if c in parent)
             if common >= max(len(stripped), len(parent)) * 0.6:
                 return parent
+    # Format 7: Filename starts with release group tag [Group] - use parent dir
+    if len(parts) >= 2:
+        parent = parts[-2]
+        if re.match(r'^\[', filename):
+            return parent
     return None
 
 
