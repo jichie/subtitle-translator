@@ -10,7 +10,9 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 
 # ffmpeg/ffprobe 查找路径：优先 FFMPEG_BIN 环境变量，否则靠 PATH
 def _ffmpeg_bin(name: str) -> str:
-    """返回 ffmpeg 或 ffprobe 的完整路径"""
+    """返回 ffmpeg 或 ffprobe 的完整路径（Windows 自动加 .exe）"""
+    if os.name == 'nt' and not name.endswith('.exe'):
+        name += '.exe'
     bindir = os.environ.get("FFMPEG_BIN")
     if bindir:
         full = os.path.join(bindir, name)
@@ -45,7 +47,7 @@ class Translator:
             pass
 
     def list_tracks(self, video_path: str):
-        ffprobe = _ffmpeg_bin("ffprobe.exe")
+        ffprobe = _ffmpeg_bin("ffprobe")
         cmd = [ffprobe, "-v", "quiet", "-print_format", "json",
                "-show_streams", "-select_streams", "s", video_path]
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -56,7 +58,7 @@ class Translator:
                 for s in json.loads(r.stdout).get("streams", [])]
 
     def extract_subtitle(self, video_path: str, stream_index: int, output_path: str) -> bool:
-        ffmpeg = _ffmpeg_bin("ffmpeg.exe")
+        ffmpeg = _ffmpeg_bin("ffmpeg")
         cmd = [ffmpeg, "-y", "-v", "quiet", "-i", video_path,
                "-map", f"0:{stream_index}", "-c:s", "srt", output_path]
         return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
