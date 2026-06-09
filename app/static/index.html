@@ -937,6 +937,7 @@ function showRegenerateButton(){
 // Manual guide generation
 async function generateGuideManual(){
   if(!selVideo){toast('请先选择视频','err');return}
+  toast('正在重新生成指南（V4-Pro分析中，约需10-30秒）...');
   let gbtn=document.getElementById('btn-gen-guide');
   if(gbtn){gbtn.disabled=true;gbtn.textContent='生成中...';gbtn.style.opacity='0.5'}
   try{
