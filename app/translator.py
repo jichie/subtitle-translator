@@ -286,12 +286,25 @@ class Translator:
 
 def detect_anime_name(video_path: str) -> Optional[str]:
     parts = Path(video_path).parts
+    # Format 1: /AnimeName/Season 1/AnimeName S01E01.mkv
     for i, p in enumerate(parts):
         if re.match(r'^Season\s*\d+$|^S\d+$', p, re.I) and i > 0:
             name = parts[i - 1]
             if re.match(r'^(vol\d*|mnt|home|media|storage)$', name, re.I):
                 return None
             return name
+    # Format 2: /AnimeName/AnimeName S01E01.mkv (no season subdir)
+    filename = Path(video_path).stem
+    m = re.match(r'^(.+?)[\s_.-]*[SE]\d{2,}(?:E\d{2,})?$', filename, re.I)
+    if m:
+        name = m.group(1).strip()
+        if len(name) > 1:
+            return name
+    # Format 3: Use parent directory name if filename contains it
+    if len(parts) >= 2:
+        parent = parts[-2]
+        if parent.lower() in filename.lower():
+            return parent
     return None
 
 
