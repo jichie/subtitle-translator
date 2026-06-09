@@ -310,10 +310,10 @@ def detect_anime_name(video_path: str) -> Optional[str]:
         parent = parts[-2]
         if re.match(r'^S\d+E\d+', filename, re.I):
             return parent
-    # Format 5: Filename is just an episode number - use parent directory
+    # Format 5: Filename starts with episode indicator - use parent directory
     if len(parts) >= 2:
         parent = parts[-2]
-        if re.match(r'^\d+$|^(?:第)?\d+[集話話]?(?:[.\s-]\d+)?$|^E\d+', filename, re.I):
+        if re.match(r'^\d+(?:\s|\D)|^(?:第)?\d+[集話話]?(?:[.\s-]\d+)?$|^E\d+', filename, re.I):
             return parent
     return None
 
