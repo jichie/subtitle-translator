@@ -665,6 +665,13 @@ async def generate_guide_standalone(req: GuideRequest):
         raise HTTPException(500, str(e))
 
 
+@app.get("/api/guide_cache_get")
+async def guide_cache_get(anime: str = ""):
+    """Check cache only - no API call"""
+    if anime in Translator._guide_cache and len(Translator._guide_cache[anime].strip()) > 10:
+        return {"ok": True, "guide": Translator._guide_cache[anime]}
+    return {"ok": False, "guide": ""}
+
 @app.get("/api/guide_cache_list")
 async def guide_cache_list():
     """返回所有已缓存的番剧指南名称"""

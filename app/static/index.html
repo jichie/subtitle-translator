@@ -397,7 +397,7 @@ $('main-sub').textContent=detectedAnime?`自动识别: ${detectedAnime}`:'未识
 $('btn-start').disabled=false;
 // Auto-load existing guide for detected anime
 if(detectedAnime){
-  loadExistingGuide(detectedAnime);
+  loadCachedGuideOnly(detectedAnime);
 }
 if(!d.tracks.length){$('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">⚠️</div><h3>无字幕轨</h3><p>未找到任何字幕轨</p></div>';return}
 let eng=d.tracks.filter(t=>['eng','en','en-US','en-GB'].includes(t.language));
@@ -870,6 +870,26 @@ function showGuidePanel(guide, label){
 }
 
 // Load existing guide for detected anime
+// Quick cache-only guide check (no API generation)
+async function loadCachedGuideOnly(animeName){
+  if(!animeName)return;
+  try{
+    var r=await fetch(API+'/guide_cache_get?anime='+encodeURIComponent(animeName));
+    var d=await r.json();
+    if(d.ok && d.guide){
+      showGuidePanel(d.guide, '已缓存');
+      var gbtn=document.getElementById('btn-gen-guide');
+      if(gbtn){gbtn.style.display='inline-block';gbtn.textContent='重新生成'}
+    } else {
+      var gbtn=document.getElementById('btn-gen-guide');
+      if(gbtn){gbtn.style.display='inline-block';gbtn.textContent='生成指南'}
+      var msg=document.getElementById('guide-empty-msg');
+      if(msg)msg.textContent='检测到番剧: '+animeName;
+    }
+    loadCachedGuideList();
+  }catch(e){}
+}
+
 async function loadExistingGuide(animeName){
   window._guideLoading=false;
   if(!animeName)return;
@@ -896,7 +916,7 @@ async function loadExistingGuide(animeName){
 async function loadCachedGuideList() {
   if(detectedAnime && !document.getElementById('guide-content') && !window._guideLoading){
     window._guideLoading=true;
-    loadExistingGuide(detectedAnime);
+    loadCachedGuideOnly(detectedAnime);
   }
   showRegenerateButton();
 }
