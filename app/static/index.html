@@ -416,7 +416,8 @@ async function startTranslate(){
   $('panel-samples').innerHTML='<div class="empty"><div class="icon-box">...</div><p>等待翻译...</p></div>';
   switchTab('tracks');
   $('status-dot').className='dot active';
-  $('btn-start').textContent='■ 停止';
+  $('btn-start').disabled=false;
+$('btn-start').textContent='■ 停止';
   $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
   window._translating=true;
   window._currentTaskId = null;
@@ -1006,7 +1007,9 @@ browse('/').then(function(){
       window._currentTaskId=t.task_id;
       window._translating=true;
       $('status-dot').className='dot active';
-      $('btn-start').textContent='■ 停止';
+      $('btn-start').disabled=false;
+      $('btn-start').disabled=false;
+$('btn-start').textContent='■ 停止';
       $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
       $('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">恢复运行中的任务...</span><span class="pct">?</span></div><div class="prog-bar"><div class="prog-fill" style="width:5%"></div></div></div>';
       poll(t.task_id);
@@ -1024,7 +1027,9 @@ setTimeout(function(){
       window._currentTaskId=t.task_id;
       window._translating=true;
       $('status-dot').className='dot active';
-      $('btn-start').textContent='■ 停止';
+      $('btn-start').disabled=false;
+      $('btn-start').disabled=false;
+$('btn-start').textContent='■ 停止';
       $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
       if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){
         $('log-badge').style.display='block';
