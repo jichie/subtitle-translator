@@ -409,7 +409,7 @@ function pickTrack(i){selTrack=i;document.querySelectorAll('.track-card').forEac
 // ═══ TRANSLATE ═══
 async function startTranslate(){
   // If currently translating, act as stop button
-  if(window._currentTaskId && timer){ stopTranslation(); return; }
+  if(window._currentTaskId){ stopTranslation(); return; }
   if(!selVideo||selTrack==null){toast('请先选择视频和字幕轨','err');return}
   window._guideShown=false;
   $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">...</div><p>开始翻译...</p></div>';
@@ -992,7 +992,28 @@ function updateThemeIcons(dark){
 }
 
 // ═══ INIT ═══
-browse('/');$('status-dot').className='dot idle';
+// Sync context toggle from backend config
+fetch(API+'/config').then(function(r){return r.json();}).then(function(c){
+  var ctxToggle=document.getElementById('ctx-switch');
+  if(ctxToggle)ctxToggle.checked=c.use_context||false;
+}).catch(function(){});
+browse('/').then(function(){
+  // 浏览完成后检查运行中的任务
+  fetch(API+'/tasks_active').then(function(r){return r.json();}).then(function(d){
+    var tasks=d.tasks||[];
+    if(tasks.length){
+      var t=tasks[0];
+      window._currentTaskId=t.task_id;
+      window._translating=true;
+      $('status-dot').className='dot active';
+      $('btn-start').textContent='■ 停止';
+      $('btn-start').style.background='var(--red)';$('btn-start').style.color='#fff';$('btn-start').style.borderColor='var(--red)';
+      $('panel-tracks').innerHTML='<div class="prog-wrap"><div class="prog-head"><span class="label">恢复运行中的任务...</span><span class="pct">?</span></div><div class="prog-bar"><div class="prog-fill" style="width:5%"></div></div></div>';
+      poll(t.task_id);
+    }
+  }).catch(function(){});
+}).catch(function(){});
+$('status-dot').className='dot idle';
 // Auto-recover running tasks after page refresh
 setTimeout(function(){
   fetch(API+'/tasks_active').then(function(r){return r.json();}).then(function(d){
