@@ -413,7 +413,6 @@ async function startTranslate(){
   if(!selVideo||selTrack==null){toast('请先选择视频和字幕轨','err');return}
   window._guideShown=false;
   $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">...</div><p>开始翻译...</p></div>';
-  $('panel-guide').innerHTML='<div class="empty"><div class="icon-box">...</div><p>等待分析...</p></div>';
   $('panel-samples').innerHTML='<div class="empty"><div class="icon-box">...</div><p>等待翻译...</p></div>';
   switchTab('tracks');
   $('status-dot').className='dot active';
@@ -465,11 +464,7 @@ if(t.state==='done'){clearInterval(timer);resetBtn();$('log-badge').style.displa
 if(t.state==='cancelled'){clearInterval(timer);resetBtn();$('log-badge').style.display='none';$('status-dot').className='dot idle';toast('翻译已中断','err');
   $('panel-tracks').innerHTML='<div class="empty"><div class="icon-box">■</div><h3>翻译已中断</h3><p>用户手动停止了翻译</p></div>';}
 if(t.state==='error'){clearInterval(timer);resetBtn();$('log-badge').style.display='none';$('status-dot').className='dot idle';toast(t.message,'err')}}catch(e){}},1000)}
-function resetBtn(){$('btn-start').disabled=false;
-// Auto-load existing guide for detected anime
-if(detectedAnime){
-  loadExistingGuide(detectedAnime);
-}$('btn-start').textContent='翻译'}
+function resetBtn(){$('btn-start').disabled=false;$('btn-start').style.background='';$('btn-start').style.color='';$('btn-start').style.borderColor='';$('btn-start').textContent='翻译';window._translating=false;window._currentTaskId=null;timer=null}
 
 // ═══ TABS ═══
 function switchTab(n){
