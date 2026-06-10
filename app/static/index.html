@@ -436,9 +436,11 @@ var pct=t.total?Math.round(t.progress/t.total*100):0;
         combined+='<div class="log-box" style="max-height:300px;margin-top:12px">'+lh+'</div>';
       }
       var _lb=document.querySelector('#panel-tracks .log-box');
+      var _pos=_lb?_lb.scrollTop:0;
       var _atBottom=_lb&&(_lb.scrollHeight-_lb.scrollTop-_lb.clientHeight<50);
       $('panel-tracks').innerHTML=combined;
-      if(_atBottom){var _nb=document.querySelector('#panel-tracks .log-box');if(_nb)_nb.scrollTop=_nb.scrollHeight;}
+      var _nb=document.querySelector('#panel-tracks .log-box');
+      if(_nb){_nb.scrollTop=_atBottom?_nb.scrollHeight:_pos;}
       if(t.state==='translating'||t.state==='analyzing'||t.state==='extracting'){$('log-badge').style.display='block'}
 if(t.guide){$('panel-guide').innerHTML=`<div class="guide-box">${t.guide.replace(/(\d+)\./g,'<b>$1.</b>').replace(/\n/g,'<br>')}</div>`;if(!window._guideShown){window._guideShown=true;switchTab('guide')}}
 if(t.samples?.length){

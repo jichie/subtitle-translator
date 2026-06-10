@@ -559,7 +559,7 @@ async def guide_refine(data: GuideRefineRequest):
     prompt = (
         f"你是翻译顾问。番剧《{data.anime_name}》的翻译指南需要根据用户修正来微调。\n\n"
         f"{guide_context}"
-        "注意：保留作品背景和角色设定的原始描述，只优化翻译规则和用词建议。\n\n"
+        "【重要】你必须原样保留作品背景、主要角色名字和角色设定描述，只允许修改和优化翻译规则、用词建议部分。绝对不要重写或改写角色名字和作品背景描述。\n\n"
         f"以下是用户对AI翻译的修正（EN原文 → AI翻译 → 用户修正）：\n\n"
         f"{corrections_text}"
         "请分析用户的修正模式（不要改动作品背景）：\n"
