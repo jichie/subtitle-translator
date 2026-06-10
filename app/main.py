@@ -191,10 +191,18 @@ if watch_folders:
 async def favicon():
     from fastapi.responses import FileResponse
     import os
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
     ico = os.path.join(os.path.dirname(__file__), "static", "icon.ico")
     if os.path.exists(ico):
         return FileResponse(ico, media_type="image/x-icon")
+    return ""
+
+@app.get("/icon_36.png")
+async def icon_36():
+    from fastapi.responses import FileResponse
+    ico_dir = os.path.join(os.path.dirname(__file__), "static")
+    png = os.path.join(ico_dir, "icon_36.png")
+    if os.path.exists(png):
+        return FileResponse(png, media_type="image/png")
     return ""
 
 @app.get("/")
