@@ -196,7 +196,14 @@ async def favicon():
         return FileResponse(ico, media_type="image/x-icon")
     return ""
 
-@app.get("/icon_36.png")
+@app.get("/icon_256.png")
+async def icon_256_file():
+    from fastapi.responses import FileResponse
+    import os
+    png = os.path.join(os.path.dirname(__file__), "static", "icon_256.png")
+    if os.path.exists(png):
+        return FileResponse(png, media_type="image/png")
+    return ""
 async def icon_36():
     from fastapi.responses import FileResponse
     ico_dir = os.path.join(os.path.dirname(__file__), "static")
