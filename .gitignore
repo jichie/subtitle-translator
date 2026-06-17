@@ -1,17 +1,19 @@
+
+app/static/favicon.ico
+build/
+# Build artifacts
+build.log
 data/config.json
 data/guide_cache.json
 data/history.json
 data/watch_folders.json
-__pycache__/
-*.pyc
-build.log
-.DS_Store
-*.log
-
-# Build artifacts
-build/
 dist/
-*.spec
+.DS_Store
 # ffmpeg download
 ffmpeg_win/
 ffmpeg.zip
+*.log
+*.pyc
+__pycache__/
+*.spec
+subtitle-translator.fpk
