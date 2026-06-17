@@ -567,7 +567,6 @@ async def review_translation(req: ReviewRequest):
     if not translator:
         raise HTTPException(400, "请先配置 API")
     real = map_path(req.path)
-    # Handle paths that already end with .chi.srt or .eng.srt
     rp = str(real)
     if rp.endswith('.chi.srt') or rp.endswith('.eng.srt'):
         base = rp[:-8]
@@ -582,7 +581,9 @@ async def review_translation(req: ReviewRequest):
         raise HTTPException(404, "未找到原文文件(.eng.srt)")
     
     try:
-        corrections = translator.review_translation(eng_path, chi_path, guide=req.guide)
+        import asyncio
+        loop = asyncio.get_event_loop()
+        corrections = await loop.run_in_executor(None, translator.review_translation, eng_path, chi_path, req.guide, None)
         return {"ok": True, "corrections": corrections, "count": len(corrections)}
     except Exception as e:
         raise HTTPException(500, str(e))
