@@ -557,6 +557,28 @@ class GuideRefineRequest(BaseModel):
     current_guide: str = ""  # 当前指南，作为微调基础
 
 
+@app.post("/api/review")
+async def review_translation(req: ReviewRequest):
+    """用 Pro 模型审核翻译质量"""
+    if not translator:
+        raise HTTPException(400, "请先配置 API")
+    real = map_path(req.path)
+    base = Path(real).stem
+    parent = Path(real).parent
+    chi_path = str(parent / f"{base}.chi.srt")
+    eng_path = str(parent / f"{base}.eng.srt")
+    
+    if not os.path.exists(chi_path):
+        raise HTTPException(404, "未找到翻译文件(.chi.srt)")
+    if not os.path.exists(eng_path):
+        raise HTTPException(404, "未找到原文文件(.eng.srt)")
+    
+    try:
+        corrections = translator.review_translation(eng_path, chi_path, guide=req.guide)
+        return {"ok": True, "corrections": corrections, "count": len(corrections)}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
 @app.post("/api/guide_refine")
 async def guide_refine(data: GuideRefineRequest):
     """用户修正字幕后，用V4-Pro分析修正模式，微调翻译指南"""
