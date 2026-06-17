@@ -551,6 +551,10 @@ async def subtitle_save(data: SubtitleSaveRequest):
 
 # ── Guide Refinement ──
 
+class ReviewRequest(BaseModel):
+    path: str
+    guide: str = ""
+
 class GuideRefineRequest(BaseModel):
     anime_name: str
     corrections: list[dict]  # [{en: "...", old_zh: "...", new_zh: "..."}, ...]
