@@ -376,7 +376,8 @@ async function selectVideo(p){
     if(r.ok){
       let d=await r.json();
       if(d.entries && d.entries.length>0){
-        // Has translated file — open editor directly
+        // Has translated file — get anime name first, then open editor
+        try{let tr=await fetch(API+'/tracks?path='+encodeURIComponent(p));let td=await tr.json();detectedAnime=td.anime_name||detectedAnime;}catch(e){}
         openHistoryEditor(chiPath, detectedAnime || '');
         return;
       }
