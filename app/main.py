@@ -567,10 +567,14 @@ async def review_translation(req: ReviewRequest):
     if not translator:
         raise HTTPException(400, "请先配置 API")
     real = map_path(req.path)
-    base = Path(real).stem
-    parent = Path(real).parent
-    chi_path = str(parent / f"{base}.chi.srt")
-    eng_path = str(parent / f"{base}.eng.srt")
+    # Handle paths that already end with .chi.srt or .eng.srt
+    rp = str(real)
+    if rp.endswith('.chi.srt') or rp.endswith('.eng.srt'):
+        base = rp[:-8]
+    else:
+        base = rp.rsplit('.', 1)[0]
+    chi_path = base + '.chi.srt'
+    eng_path = base + '.eng.srt'
     
     if not os.path.exists(chi_path):
         raise HTTPException(404, "未找到翻译文件(.chi.srt)")

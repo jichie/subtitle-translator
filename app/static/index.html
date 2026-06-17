@@ -743,23 +743,39 @@ async function proReview(){
   var path=window._outPath;
   if(!path){toast('无字幕文件','err');return}
   var btn=document.getElementById('btn-review');
-  if(btn){btn.disabled=true;btn.textContent='审核中...';btn.style.opacity='0.5'}
+  if(btn){btn.disabled=true;btn.textContent='审核中(第1次)...';btn.style.opacity='0.5'}
   toast('Pro模型审核中，约需10-30秒...');
-  try{
-    var r=await fetch(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({path:path,guide:window._currentGuide||''})});
-    var d=await r.json();
-    if(d.ok){
-      // Reload the editor to show corrected content
-      var name=window._outPath?window._outPath.split('/').pop():'';
-      openHistoryEditor(window._outPath, detectedAnime||name);
-      if(d.corrections&&d.corrections.length){
-        toast('审核完成，已自动修正 '+d.corrections.length+' 处','ok');
+  for(var attempt=1;attempt<=3;attempt++){
+    try{
+      var ctrl=new AbortController();setTimeout(function(){ctrl.abort();},120000);
+      var r=await fetch(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({path:path,guide:window._currentGuide||''}),signal:ctrl.signal});
+      if(r.ok){
+        var d=await r.json();
+        if(d.ok){
+          var name=window._outPath?window._outPath.split('/').pop():'';
+          openHistoryEditor(window._outPath, detectedAnime||name);
+          if(d.corrections&&d.corrections.length){
+            toast('审核完成，已自动修正 '+d.corrections.length+' 处','ok');
+          }else{
+            toast('审核通过，未发现问题','ok');
+          }
+          if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
+          return;
+        }
       }else{
-        toast('审核通过，未发现问题','ok');
+        var err=await r.json().catch(function(){});
+        toast('审核失败('+attempt+'/3): '+(err.detail||r.status),'err');
+      }
+    }catch(e){
+      if(attempt<3){
+        toast('审核超时('+attempt+'/3)，正在重试...');
+        if(btn)btn.textContent='审核中(第'+(attempt+1)+'次)...';
+      }else{
+        toast('审核失败(3/3): 超时，请稍后重试','err');
       }
     }
-  }catch(e){toast('审核失败: '+e.message,'err')}
+  }
   if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
 }
 
@@ -825,7 +841,7 @@ async function openHistoryEditor(path, name){
         <button onclick="saveEdits('${esc(path)}')" style="padding:6px 14px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--accent);color:#fff">保存修改</button>
         <button onclick="refineGuide()" id="btn-refine" style="padding:6px 14px;border:1px solid var(--accent);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">微调指南</button>
         <button onclick="proReview()" id="btn-review" style="padding:6px 14px;border:1px solid var(--purple);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--purple);color:#fff">Pro 审核</button>
-        <button onclick="proReview()" id="btn-review" style="padding:6px 14px;border:1px solid var(--purple);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--purple);color:#fff">Pro 审核</button>
+        
       </div>
     </div>`;
     h+=`<div class="samples-grid" style="grid-template-columns:1fr">`;
