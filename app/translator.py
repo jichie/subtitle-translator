@@ -72,57 +72,6 @@ class Translator:
         """去掉句号，保留？！"""
         return re.sub(r'[。.]', '', text)
 
-    def review_translation(self, eng_srt: str, chi_srt: str, guide: str = None, log_fn=None) -> list:
-        import pysrt, re, time
-        def log(msg):
-            if log_fn: log_fn(msg)
-        
-        eng_subs = pysrt.open(eng_srt, encoding="utf-8")
-        chi_subs = pysrt.open(chi_srt, encoding="utf-8")
-        n = min(len(eng_subs), len(chi_subs))
-        
-        guide_text = f"\n参考翻译指南：\n{guide}\n" if guide else ""
-        corrections = []
-        batch_size = 20
-        
-        for i in range(0, n, batch_size):
-            chunk = []
-            for j in range(i, min(i + batch_size, n)):
-                en = eng_subs[j].text.strip()
-                zh = chi_subs[j].text.strip()
-                if en and zh:
-                    chunk.append(f"[{j}]\nEN: {en}\nZH: {zh}\n")
-            if not chunk: continue
-            
-            prompt = (
-                f"你是专业字幕审校。审核以下翻译的正确性和自然度。{guide_text}\n\n"
-                f"{'─'*40}\n{''.join(chunk)}{'─'*40}\n\n"
-                "对你认为有问题的行，输出修正后的中文版本。\n"
-                "格式：[行号] 修正后的中文译文\n"
-                "例如：\n[5] 我今天很高兴\n[12] 我不确定能不能去\n"
-                "只输出你修改过的行，正确的不要输出。必�须严格保持[行号] 译文的格式。")
-            
-            try:
-                r = self.client.chat.completions.create(
-                    model="deepseek-v4-pro", messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3, max_tokens=4000, extra_body={"enable_thinking": False})
-                content = r.choices[0].message.content.strip()
-                if content:
-                    corrections.append(f"[批次{i//batch_size+1}]\n{content}")
-                    for line in content.split('\n'):
-                        m = re.match(r'\[(\d+)\]\s*(.+)', line)
-                        if m:
-                            idx = int(m.group(1))
-                            new_text = m.group(2).strip()
-                            if 0 <= idx < len(chi_subs) and new_text and len(new_text) > 1:
-                                chi_subs[idx].text = new_text
-                log(f"Reviewed batch {i//batch_size+1}/{(n-1)//batch_size+1}")
-            except Exception as e:
-                log(f"Review batch failed: {e}")
-        
-        chi_subs.save(chi_srt, encoding="utf-8")
-        return corrections
-
     def generate_guide(self, anime_name: str, context_model: str, log_fn=None, force=False) -> str:
         """生成翻译指南（同一番剧只生成一次，缓存复用）"""
         # 查缓存

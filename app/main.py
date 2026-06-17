@@ -551,51 +551,12 @@ async def subtitle_save(data: SubtitleSaveRequest):
 
 # ── Guide Refinement ──
 
-class ReviewRequest(BaseModel):
-    path: str
-    guide: str = ""
-
 class GuideRefineRequest(BaseModel):
     anime_name: str
     corrections: list[dict]  # [{en: "...", old_zh: "...", new_zh: "..."}, ...]
     current_guide: str = ""  # 当前指南，作为微调基础
 
 
-@app.post("/api/review")
-async def review_translation(req: ReviewRequest):
-    """用 Pro 模型审核翻译质量"""
-    if not translator:
-        raise HTTPException(400, "请先配置 API")
-    real = map_path(req.path)
-    rp = str(real)
-    if rp.endswith('.chi.srt') or rp.endswith('.eng.srt'):
-        base = rp[:-8]
-    else:
-        base = rp.rsplit('.', 1)[0]
-    chi_path = base + '.chi.srt'
-    eng_path = base + '.eng.srt'
-    
-    if not os.path.exists(chi_path):
-        raise HTTPException(404, "未找到翻译文件(.chi.srt)")
-    if not os.path.exists(eng_path):
-        raise HTTPException(404, "未找到原文文件(.eng.srt)")
-    
-    # Track this review in tasks dict for recovery after page refresh
-    tid = str(uuid.uuid4())[:8]
-    task = {"task_id": tid, "video": req.path, "anime_name": "", "state": "reviewing",
-            "progress": 0, "total": 100, "message": "Pro审核中...", "logs": [], "guide": None,
-            "output": None, "samples": [], "source": "review"}
-    tasks[tid] = task
-    
-    try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        corrections = await loop.run_in_executor(None, translator.review_translation, eng_path, chi_path, req.guide, None)
-        task["state"] = "done"
-        task["message"] = f"审核完成: {len(corrections)}处修正"
-        return {"ok": True, "corrections": corrections, "count": len(corrections)}
-    except Exception as e:
-        raise HTTPException(500, str(e))
 
 @app.post("/api/guide_refine")
 async def guide_refine(data: GuideRefineRequest):

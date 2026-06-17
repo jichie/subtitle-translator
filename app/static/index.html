@@ -738,45 +738,6 @@ async function stopTranslation(){
   $('log-badge').style.display='none';
 }
 
-// ═══ PRO REVIEW ═══
-async function proReview(){
-  var path=window._outPath;
-  if(!path){toast('无字幕文件','err');return}
-  var btn=document.getElementById('btn-review');
-  if(btn){btn.disabled=true;btn.textContent='Pro审核中...';btn.style.opacity='0.5'}
-  toast('Pro模型审核中，约需10-30秒...');
-  for(var attempt=1;attempt<=2;attempt++){
-    try{
-      var ctrl=new AbortController();setTimeout(function(){ctrl.abort();},180000);
-      var r=await fetch(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({path:path,guide:window._currentGuide||''}),signal:ctrl.signal});
-      if(!r.ok){
-        var err=await r.json().catch(function(){});
-        toast('审核失败: '+(err&&err.detail||r.status),'err');
-        if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
-        return;
-      }
-      var d=await r.json();
-      if(d.ok||d.corrections){
-        var name=window._outPath?window._outPath.split('/').pop():'';
-        openHistoryEditor(window._outPath, detectedAnime||name);
-        if(d.corrections&&d.corrections.length){
-          toast('审核完成，已自动修正 '+d.corrections.length+' 处','ok');
-        }else{
-          toast('审核通过，未发现问题','ok');
-        }
-        if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
-        return;
-      }
-      // d.ok is false or missing - one retry
-      if(attempt<2){toast('正在重试...');continue;}
-    }catch(e){
-      if(attempt===1){toast('审核超时，正在重试...');continue;}
-    }
-  }
-  toast('审核失败，请稍后重试','err');
-  if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
-}
 
 // ═══ UTILS ═══
 function toast(m,c){let e=document.createElement('div');e.className=`toast ${c||''}`;e.textContent=m;$('toast-wrap').appendChild(e);setTimeout(()=>e.remove(),3000)}
@@ -839,7 +800,7 @@ async function openHistoryEditor(path, name){
       <div style="display:flex;gap:8px">
         <button onclick="saveEdits('${esc(path)}')" style="padding:6px 14px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--accent);color:#fff">保存修改</button>
         <button onclick="refineGuide()" id="btn-refine" style="padding:6px 14px;border:1px solid var(--accent);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">微调指南</button>
-        <button onclick="proReview()" id="btn-review" style="padding:6px 14px;border:1px solid var(--purple);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--purple);color:#fff">Pro 审核</button>
+
         
       </div>
     </div>`;
