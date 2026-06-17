@@ -749,15 +749,15 @@ async function proReview(){
     var r=await fetch(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({path:path,guide:window._currentGuide||''})});
     var d=await r.json();
-    if(d.ok&&d.corrections.length){
-      var h='<div style="margin:12px 0;padding:16px;background:var(--surface);border:1px solid var(--accent);border-radius:12px"><span style="font-size:13px;font-weight:500;color:var(--accent)">Pro 审核结果 ('+d.count+'条修正)</span></div>';
-      d.corrections.forEach(function(batch){
-        h+='<div style="margin:8px 0;padding:12px;background:var(--surface2);border-radius:8px;font-size:11px;line-height:1.8;white-space:pre-wrap">'+esc(batch)+'</div>';
-      });
-      $('panel-samples').insertAdjacentHTML('beforeend',h);
-      toast('审核完成，发现 '+d.count+' 处可改进','ok');
-    }else{
-      toast('审核通过，未发现问题','ok');
+    if(d.ok){
+      // Reload the editor to show corrected content
+      var name=window._outPath?window._outPath.split('/').pop():'';
+      openHistoryEditor(window._outPath, detectedAnime||name);
+      if(d.corrections&&d.corrections.length){
+        toast('审核完成，已自动修正 '+d.corrections.length+' 处','ok');
+      }else{
+        toast('审核通过，未发现问题','ok');
+      }
     }
   }catch(e){toast('审核失败: '+e.message,'err')}
   if(btn){btn.disabled=false;btn.textContent='Pro 审核';btn.style.opacity='1'}
