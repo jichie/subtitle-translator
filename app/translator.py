@@ -87,7 +87,8 @@ class Translator:
             f"为番剧《{anime_name}》生成翻译风格指南。直接输出指南内容。\n"
             "必须包含：作品介绍（故事背景）、主要角色名字及语气区别、关键名词译法、翻译禁忌。\n"
             "注意：角色名字不能省略，必须写出具体人名。不超过600字。\n"
-            "按以下结构输出：1.作品介绍（故事背景和主要角色名）2.整体风格基调 3.主要角色语气区别 4.关键名词译法 5.特殊表达处理 6.翻译禁忌。"
+            "按以下结构输出：1.作品介绍（故事背景和主要角色名）2.整体风格基调 3.主要角色语气区别 4.关键名词译法 5.特殊表达处理 6.翻译禁忌。\n"
+            "注意：翻译日本称呼时不要直接写\u201c桑\u201d，应根据角色身份译为先生/小姐/同学或直接省略。"
         )
         try:
             if log_fn: log_fn(f"Calling {context_model}...")
@@ -159,6 +160,8 @@ class Translator:
                         trans[i] = self._clean_punct(trans[i])
                         # Remove any CTX markers that leaked into translation
                         trans[i] = re.sub(r'\[CTX[^\]]*\]', '', trans[i]).strip()
+                        # Naturalize Japanese honorifics
+                        trans[i] = re.sub(r'(?<=[\u4e00-\u9fff])桑(?=[。，！？\s]|$)', '小姐', trans[i])
                 missing = sum(1 for i, t in enumerate(trans) if not t and texts[i].strip())
                 if missing > 0 and attempt < 2:
                     if log_fn: log_fn(f"Missing {missing} items, retry (attempt {attempt+2})...")
