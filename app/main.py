@@ -580,10 +580,19 @@ async def review_translation(req: ReviewRequest):
     if not os.path.exists(eng_path):
         raise HTTPException(404, "未找到原文文件(.eng.srt)")
     
+    # Track this review in tasks dict for recovery after page refresh
+    tid = str(uuid.uuid4())[:8]
+    task = {"task_id": tid, "video": req.path, "anime_name": "", "state": "reviewing",
+            "progress": 0, "total": 100, "message": "Pro审核中...", "logs": [], "guide": None,
+            "output": None, "samples": [], "source": "review"}
+    tasks[tid] = task
+    
     try:
         import asyncio
         loop = asyncio.get_event_loop()
         corrections = await loop.run_in_executor(None, translator.review_translation, eng_path, chi_path, req.guide, None)
+        task["state"] = "done"
+        task["message"] = f"审核完成: {len(corrections)}处修正"
         return {"ok": True, "corrections": corrections, "count": len(corrections)}
     except Exception as e:
         raise HTTPException(500, str(e))
