@@ -97,8 +97,10 @@ class Translator:
             prompt = (
                 f"你是专业字幕审校。审核以下翻译的正确性和自然度。{guide_text}\n\n"
                 f"{'─'*40}\n{''.join(chunk)}{'─'*40}\n\n"
-                f"对每行标注：✅ 正确 或 ⚠️ 问题+修正建议。\n"
-                f"格式：[行号] ✅ 或 [行号] ⚠️ 原译→建议\n只输出有问题的行。")
+                "对你认为有问题的行，输出修正后的中文版本。\n"
+                "格式：[行号] 修正后的中文译文\n"
+                "例如：\n[5] 我今天很高兴\n[12] 我不确定能不能去\n"
+                "只输出你修改过的行，正确的不要输出。必�须严格保持[行号] 译文的格式。")
             
             try:
                 r = self.client.chat.completions.create(
@@ -108,15 +110,12 @@ class Translator:
                 if content:
                     corrections.append(f"[批次{i//batch_size+1}]\n{content}")
                     for line in content.split('\n'):
-                        m = re.match(r'\[(\d+)\]', line)
+                        m = re.match(r'\[(\d+)\]\s*(.+)', line)
                         if m:
                             idx = int(m.group(1))
-                            if 0 <= idx < len(chi_subs):
-                                parts = re.split(r'[→➜]', line)
-                                if len(parts) >= 2:
-                                    suggestion = parts[-1].strip()
-                                    if suggestion and not suggestion.startswith('[') and len(suggestion) > 1:
-                                        chi_subs[idx].text = suggestion
+                            new_text = m.group(2).strip()
+                            if 0 <= idx < len(chi_subs) and new_text and len(new_text) > 1:
+                                chi_subs[idx].text = new_text
                 log(f"Reviewed batch {i//batch_size+1}/{(n-1)//batch_size+1}")
             except Exception as e:
                 log(f"Review batch failed: {e}")
