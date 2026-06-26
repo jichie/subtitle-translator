@@ -24,6 +24,7 @@ def _ffmpeg_bin(name: str) -> str:
 class Translator:
 
     _guide_cache: dict = {}
+    _cache_lock = threading.Lock()
 
     def __init__(self, api_key: str, base_url: str):
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
@@ -34,7 +35,8 @@ class Translator:
             cache_file = os.path.join(DATA_DIR, "guide_cache.json")
             if os.path.exists(cache_file):
                 with open(cache_file, 'r', encoding='utf-8') as f:
-                    Translator._guide_cache = json.load(f)
+                    with Translator._cache_lock:
+                        Translator._guide_cache = json.load(f)
         except Exception:
             pass
 
@@ -42,7 +44,8 @@ class Translator:
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
             with open(os.path.join(DATA_DIR, "guide_cache.json"), 'w', encoding='utf-8') as f:
-                json.dump(Translator._guide_cache, f, ensure_ascii=False)
+                with Translator._cache_lock:
+                    json.dump(Translator._guide_cache, f, ensure_ascii=False)
         except Exception:
             pass
 
@@ -69,19 +72,22 @@ class Translator:
         return re.sub(r'\s+', ' ', text).strip()
 
     def _clean_punct(self, text: str) -> str:
-        """去掉句号，保留？！"""
-        return re.sub(r'[。.]', '', text)
+        """去掉句号（仅中文），保留？！保留英文句点（数字/缩写不受影响）"""
+        text = re.sub(r'。', '', text)        # 只删中文句号
+        text = re.sub(r'(?<!\d)\.(?!\d)', '', text)  # 删非数字间英文句点（例如句尾）
+        return text
 
     def generate_guide(self, anime_name: str, context_model: str, log_fn=None, force=False) -> str:
         """生成翻译指南（同一番剧只生成一次，缓存复用）"""
-        # 查缓存
-        if not force and anime_name in Translator._guide_cache:
-            cached = Translator._guide_cache[anime_name]
-            if cached and len(cached) > 10:
-                if log_fn: log_fn(f"Cached guide: {len(cached)} chars")
-                return cached
-            else:
-                if log_fn: log_fn(f"Skipping empty cache ({len(cached)} chars), regenerating...")
+        # 查缓存（带锁）
+        with Translator._cache_lock:
+            if not force and anime_name in Translator._guide_cache:
+                cached = Translator._guide_cache[anime_name]
+                if cached and len(cached) > 10:
+                    if log_fn: log_fn(f"Cached guide: {len(cached)} chars")
+                    return cached
+                else:
+                    if log_fn: log_fn(f"Skipping empty cache ({len(cached)} chars), regenerating...")
 
         prompt = (
             f"为番剧《{anime_name}》生成翻译风格指南。直接输出指南内容。\n"
@@ -97,7 +103,8 @@ class Translator:
                 temperature=0.4, max_tokens=4000,
                 extra_body={"enable_thinking": False})
             guide = r.choices[0].message.content.strip()
-            Translator._guide_cache[anime_name] = guide
+            with Translator._cache_lock:
+                Translator._guide_cache[anime_name] = guide
             self._save_cache()
             if log_fn: log_fn(f"Generated and cached ({len(guide)} chars)")
             return guide
@@ -195,7 +202,15 @@ class Translator:
                 raise RuntimeError("字幕提取失败")
             log(f"Extracted: {Path(eng_srt).name}")
 
-            subs = pysrt.open(eng_srt, encoding="utf-8")
+            # 尝试多种编码打开 SRT 文件
+            for enc in ("utf-8", "utf-8-sig", "gbk", "latin-1", "shift-jis"):
+                try:
+                    subs = pysrt.open(eng_srt, encoding=enc)
+                    break
+                except (UnicodeDecodeError, Exception):
+                    continue
+            else:
+                raise RuntimeError(f"无法解码字幕文件: {eng_srt}")
             total = len(subs)
             clean = [self._strip_html(s.text) for s in subs]
             log(f"Loaded {total} subtitles")
@@ -331,7 +346,10 @@ def detect_anime_name(video_path: str) -> Optional[str]:
     # Format 5: Filename starts with episode indicator - use parent directory
     if len(parts) >= 2:
         parent = parts[-2]
-        if re.match(r'^\d+(?:\s|\D)|^(?:第)?\d+[集話話]?(?:[.\s-]\d+)?$|^E\d+', filename, re.I):
+        # 更严格的匹配：仅匹配明确以集数标记开头的（不带标题），避免误匹配
+        if re.match(r'^(?:第)?\d+[集話話]?\s*[-—–]\s', filename) or \
+           re.match(r'^E\d{2,}\s', filename, re.I) or \
+           re.match(r'^\d{2,}\s*[vV]\d', filename):
             return parent
     # Format 6: Strip episode suffix and match against parent directory
     if len(parts) >= 2:
@@ -351,11 +369,19 @@ def detect_anime_name(video_path: str) -> Optional[str]:
 
 def map_path(web_path: str) -> str:
     p = web_path.strip()
-    if p.startswith("/videos/"): return os.path.join(VIDEO_ROOT, p[8:])
-    if p.startswith("/vol3/"): p = p[6:]
-    elif p.startswith("vol3/"): p = p[5:]
-    if p.startswith("/"): return os.path.join(VIDEO_ROOT, p.lstrip("/"))
-    return os.path.join(VIDEO_ROOT, p)
+    if p.startswith("/videos/"):
+        p = p[8:]
+    elif p.startswith("/vol3/"):
+        p = p[6:]
+    elif p.startswith("vol3/"):
+        p = p[5:]
+    elif p.startswith("/"):
+        p = p.lstrip("/")
+    # Resolve to real path and validate it stays within VIDEO_ROOT
+    real = os.path.realpath(os.path.join(VIDEO_ROOT, p))
+    if not real.startswith(os.path.realpath(VIDEO_ROOT)):
+        raise ValueError(f"Path traversal detected: {web_path}")
+    return real
 
 
 def scan_videos(folder_path: str) -> list[str]:
@@ -366,6 +392,6 @@ def scan_videos(folder_path: str) -> list[str]:
             for f in sorted(files):
                 if re.search(r'\.(mkv|mp4|avi|mov|ts)$', f, re.I):
                     videos.append(os.path.join(root, f))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[scan_videos] Error scanning {folder_path}: {e}")
     return videos

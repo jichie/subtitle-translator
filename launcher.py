@@ -49,4 +49,14 @@ if __name__ == '__main__':
 
     # 启动 FastAPI 服务
     from app.main import app
-    uvicorn.run(app, host="127.0.0.1", port=7860, log_level="info")
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=7860, log_level="info")
+    except OSError as e:
+        if "address already in use" in str(e).lower() or "errno 98" in str(e).lower():
+            print(f"
+❌ 端口 7860 已被占用，请关闭其他程序后重试")
+            print(f"   或手动修改端口（如 port=7861）")
+        else:
+            print(f"
+❌ 启动失败: {e}")
+        sys.exit(1)

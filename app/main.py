@@ -1,7 +1,10 @@
-import asyncio, json, os, re, time, uuid, threading
+import asyncio, json, logging, os, re, time, uuid, threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger("subtitle-translator")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s %(message)s")
 
 import pysrt
 
@@ -23,6 +26,7 @@ config: dict = {}
 history: list[dict] = []
 watch_folders: dict[str, dict] = {}  # path -> {interval, last_scan, enabled}
 watch_thread: Optional[threading.Thread] = None
+_watch_stop = threading.Event()
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
@@ -75,8 +79,9 @@ def save_watch():
 
 def watch_loop():
     """后台线程：定期扫描订阅文件夹"""
-    while True:
-        time.sleep(300)  # 5分钟
+    while not _watch_stop.is_set():
+        if _watch_stop.wait(300):  # 5分钟，但可被 Event 打断
+            break
         for fpath, info in list(watch_folders.items()):
             if not info.get("enabled", True):
                 continue
@@ -108,7 +113,7 @@ def watch_loop():
                                 return True
                             for k, v in kw.items():
                                 if k == "log":
-                                    t["logs"].append(f"[{t.get('state', '?')}] {v}")
+                                    t.setdefault("logs", []).append(f"[{t.get('state', '?')}] {v}")
                                 elif k in t:
                                     t[k] = v
                             if kw.get("state") == "done":
@@ -157,6 +162,7 @@ def _send_webhook(task: dict):
 
 
 def _add_history(task: dict):
+    _mark_task_done(task)
     entry = {
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "video": Path(task.get("video", "")).name,
@@ -174,6 +180,25 @@ def _add_history(task: dict):
     threading.Thread(target=_send_webhook, args=(task,), daemon=True).start()
 
 
+def _cleanup_tasks_loop():
+    """定期清理已完成超过 1 小时的任务"""
+    while True:
+        time.sleep(600)  # 每 10 分钟清理一次
+        now = time.time()
+        expired = [tid for tid, t in list(tasks.items())
+                   if t.get("state") in ("done", "error", "cancelled")
+                   and now - t.get("_done_time", now) > 3600]
+        for tid in expired:
+            del tasks[tid]
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} expired tasks")
+
+
+def _mark_task_done(task: dict):
+    """任务完成时记录时间戳"""
+    task["_done_time"] = time.time()
+
+
 load_config()
 load_history()
 load_watch()
@@ -184,13 +209,15 @@ if watch_folders:
         watch_thread = threading.Thread(target=watch_loop, daemon=True)
         watch_thread.start()
     except Exception as e:
-        pass
+        logger.warning(f"Watch thread start failed: {e}")
+
+# Start cleanup thread
+cleanup_thread = threading.Thread(target=_cleanup_tasks_loop, daemon=True)
+cleanup_thread.start()
 
 
 @app.get("/favicon.ico")
 async def favicon():
-    from fastapi.responses import FileResponse
-    import os
     ico = os.path.join(os.path.dirname(__file__), "static", "icon.ico")
     if os.path.exists(ico):
         return FileResponse(ico, media_type="image/x-icon")
@@ -198,14 +225,12 @@ async def favicon():
 
 @app.get("/icon_256.png")
 async def icon_256_file():
-    from fastapi.responses import FileResponse
-    import os
     png = os.path.join(os.path.dirname(__file__), "static", "icon_256.png")
     if os.path.exists(png):
         return FileResponse(png, media_type="image/png")
     return ""
+@app.get("/icon_36.png")
 async def icon_36():
-    from fastapi.responses import FileResponse
     ico_dir = os.path.join(os.path.dirname(__file__), "static")
     png = os.path.join(ico_dir, "icon_36.png")
     if os.path.exists(png):
@@ -265,7 +290,7 @@ async def update_config(data: ConfigUpdate):
 # ── Browse ──
 
 @app.get("/api/browse")
-async def browse(path: str = "/", sort: str = "name"):
+def browse(path: str = "/", sort: str = "name"):
     real_path = map_path(path)
     if not os.path.exists(real_path):
         return {"error": "Path not found"}
@@ -292,7 +317,7 @@ async def browse(path: str = "/", sort: str = "name"):
 # ── Tracks ──
 
 @app.get("/api/tracks")
-async def get_tracks(path: str):
+def get_tracks(path: str):
     real = map_path(path)
     if not translator:
         raise HTTPException(400, "请先配置 API")
@@ -306,7 +331,7 @@ async def get_tracks(path: str):
 # ── Scan folder ──
 
 @app.get("/api/scan_folder")
-async def scan_folder(path: str = "/"):
+def scan_folder(path: str = "/"):
     videos = scan_videos(path)
     result = []
     for v in videos:
@@ -375,7 +400,7 @@ async def start_translate(req: TranslateRequest):
 
 
 @app.post("/api/translate_batch")
-async def start_batch(req: TranslateRequest):
+def start_batch(req: TranslateRequest):
     """翻译文件夹，支持选择性翻译"""
     if not translator: raise HTTPException(400, "请先配置 API")
     if req.videos:
@@ -416,8 +441,15 @@ async def start_batch(req: TranslateRequest):
 
         def make_fn(t):
             def fn(**kw):
+                if kw.get("check_cancelled"):
+                    return t.get("state") in ("cancelled", "error")
+                if t.get("state") == "cancelled":
+                    return True
                 for k, v in kw.items():
-                    if k in t: t[k] = v
+                    if k == "log":
+                        t.setdefault("logs", []).append(f"[{t.get('state','?')}] {v}")
+                    elif k in t:
+                        t[k] = v
                 if kw.get("state") == "done":
                     _add_history(t)
             return fn
@@ -501,9 +533,9 @@ async def get_active():
 # ── Subtitle Editor ──
 
 @app.get("/api/subtitle_read")
-async def subtitle_read(path: str):
-    path = map_path(path)
+def subtitle_read(path: str):
     """读取已翻译的字幕文件内容，返回所有条目的原文和译文"""
+    path = map_path(path)
     if not os.path.exists(path):
         raise HTTPException(404, "字幕文件不存在")
     try:
@@ -533,7 +565,7 @@ class SubtitleSaveRequest(BaseModel):
 
 
 @app.post("/api/subtitle_save")
-async def subtitle_save(data: SubtitleSaveRequest):
+def subtitle_save(data: SubtitleSaveRequest):
     """保存编辑后的字幕"""
     path = map_path(data.path)
     if not os.path.exists(path):
@@ -567,7 +599,8 @@ async def guide_refine(data: GuideRefineRequest):
     # Pure guide save (no corrections) - just update cache
     if not data.corrections or len(data.corrections) == 0:
         if data.current_guide.strip():
-            Translator._guide_cache[data.anime_name] = data.current_guide
+            with Translator._cache_lock:
+                Translator._guide_cache[data.anime_name] = data.current_guide
             translator._save_cache()
             return {"ok": True, "guide": data.current_guide, "saved": True}
 
@@ -605,7 +638,8 @@ async def guide_refine(data: GuideRefineRequest):
         refined = r.choices[0].message.content.strip()
 
         # 更新缓存
-        Translator._guide_cache[data.anime_name] = refined
+        with Translator._cache_lock:
+            Translator._guide_cache[data.anime_name] = refined
         translator._save_cache()
 
         return {"ok": True, "guide": refined, "chars": len(refined)}
@@ -718,7 +752,13 @@ async def guide_cache_list():
 
 @app.get("/api/download")
 async def download(path: str):
-    if not os.path.exists(path):
-        raise HTTPException(404)
-    return FileResponse(path, filename=os.path.basename(path),
+    from .translator import map_path, VIDEO_ROOT
+    real = map_path(path)
+    real = os.path.realpath(real)
+    root = os.path.realpath(VIDEO_ROOT)
+    if not real.startswith(root):
+        raise HTTPException(403, "访问被拒绝")
+    if not os.path.exists(real):
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(real, filename=os.path.basename(real),
                         media_type="application/octet-stream")
