@@ -79,23 +79,32 @@ def save_watch():
 
 def watch_loop():
     """后台线程：定期扫描订阅文件夹"""
+    _failed_videos: set[str] = set()  # 记录失败的视频，避免重复尝试
     while not _watch_stop.is_set():
         if _watch_stop.wait(300):  # 5分钟，但可被 Event 打断
             break
         for fpath, info in list(watch_folders.items()):
             if not info.get("enabled", True):
                 continue
-            real = map_path(fpath)
+            try:
+                real = map_path(fpath)
+            except ValueError as e:
+                logger.warning(f"Watch: invalid path {fpath}: {e}")
+                continue
             if not os.path.isdir(real):
                 continue
+            if not translator:
+                logger.warning("Watch: translator not configured, skipping scan")
+                break
             videos = scan_videos(fpath)
             translated = set()
             for v in videos:
                 base = Path(v).stem
                 if os.path.exists(str(Path(v).parent / f"{base}.chi.srt")):
                     translated.add(v)
-            new_videos = [v for v in videos if v not in translated]
-            if new_videos and translator:
+            new_videos = [v for v in videos if v not in translated and v not in _failed_videos]
+            if new_videos:
+                logger.info(f"Watch: found {len(new_videos)} new videos in {fpath}")
                 for v in new_videos[:3]:  # max 3 at a time
                     anime = detect_anime_name(v)
                     tid = str(uuid.uuid4())[:8]
@@ -131,6 +140,8 @@ def watch_loop():
                             t["state"] = "error"
                             t["message"] = str(e)
                             t["logs"].append(f"[error] {e}")
+                            _failed_videos.add(t["video"])
+                            logger.warning(f"Watch: translation failed for {Path(t['video']).name}: {e}")
 
                     executor.submit(run_trans, task)
             watch_folders[fpath]["last_scan"] = time.time()
@@ -438,6 +449,7 @@ def start_batch(req: TranslateRequest):
         tracks = translator.list_tracks(v)
         eng = next((t for t in tracks if t["language"] in ("eng", "en", "en-US", "en-GB")), None)
         track_idx = eng["index"] if eng else (tracks[0]["index"] if tracks else 0)
+        # If no embedded subtitles, use track_index=0 which triggers auto-detection + external SRT fallback in run_translation
 
         def make_fn(t):
             def fn(**kw):

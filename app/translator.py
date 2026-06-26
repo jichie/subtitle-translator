@@ -66,6 +66,33 @@ class Translator:
                "-map", f"0:{stream_index}", "-c:s", "srt", output_path]
         return subprocess.run(cmd, capture_output=True, text=True).returncode == 0
 
+    def find_subtitle_track(self, video_path: str) -> Optional[int]:
+        """自动查找英语字幕流索引，找不到返回 None"""
+        tracks = self.list_tracks(video_path)
+        if not tracks:
+            return None
+        # 优先英语
+        eng = next((t for t in tracks if t["language"] in ("eng", "en", "en-US", "en-GB")), None)
+        if eng:
+            return eng["index"]
+        # 没有英语就取第一条
+        return tracks[0]["index"]
+
+    def find_external_srt(self, video_path: str) -> Optional[str]:
+        """查找视频同目录下的外挂字幕文件（.srt/.ass/.ssa）"""
+        base = Path(video_path).stem
+        parent = Path(video_path).parent
+        for ext in (".eng.srt", ".en.srt", ".srt", ".ass", ".ssa"):
+            for name in [f"{base}{ext}", f"{base}.English{ext.replace('.', '.', 1)}"]:
+                candidate = str(parent / name)
+                if os.path.exists(candidate):
+                    return candidate
+        # 也尝试同目录下不含基名但以 .eng.srt 结尾的
+        for f in os.listdir(parent):
+            if f.endswith((".eng.srt", ".en.srt")) and base.split()[0] in f:
+                return str(parent / f)
+        return None
+
     def _strip_html(self, text: str) -> str:
         text = re.sub(r'<[^>]+>', '', text)
         text = re.sub(r'\{[^}]*\}', '', text)
@@ -194,12 +221,37 @@ class Translator:
         out_srt = str(parent / f"{base}.chi.srt")
 
         try:
-                # 1. Extract
+                # 1. Extract (优先内嵌字幕，fallback 到外挂 SRT)
             update_fn(state="extracting", message="提取字幕...")
-            log(f"Extracting track #{track_index} from {Path(video_path).name}")
-            if not self.extract_subtitle(video_path, track_index, eng_srt):
-                log("Extraction failed!")
-                raise RuntimeError("字幕提取失败")
+            track_idx = track_index
+            used_external = False
+
+            # 如果 track_index 为 0（自动模式），尝试检测英语字幕流
+            if track_idx == 0:
+                detected = self.find_subtitle_track(video_path)
+                if detected is not None:
+                    track_idx = detected
+                    log(f"Auto-detected subtitle track #{track_idx}")
+                else:
+                    log(f"No embedded subtitles found, trying external SRT...")
+
+            # 尝试提取内嵌字幕
+            extraction_ok = False
+            if track_idx is not None and track_idx >= 0:
+                log(f"Extracting track #{track_idx} from {Path(video_path).name}")
+                extraction_ok = self.extract_subtitle(video_path, track_idx, eng_srt)
+
+            if not extraction_ok:
+                # Fallback: 查找外挂 SRT
+                ext_srt = self.find_external_srt(video_path)
+                if ext_srt:
+                    log(f"Using external subtitle: {Path(ext_srt).name}")
+                    import shutil
+                    shutil.copy2(ext_srt, eng_srt)
+                    extraction_ok = True
+                else:
+                    log("Extraction failed! No embedded or external subtitles found.")
+                    raise RuntimeError("字幕提取失败：无内嵌字幕流，也未找到外挂字幕文件")
             log(f"Extracted: {Path(eng_srt).name}")
 
             # 尝试多种编码打开 SRT 文件
