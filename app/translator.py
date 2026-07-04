@@ -335,6 +335,10 @@ class Translator:
                 if i < len(translated) and translated[i].strip():
                     s.text = translated[i]
             subs.save(out_srt, encoding="utf-8")
+            
+            # Generate bilingual SRT if requested (handled by run_translation caller)
+            # Auto cleanup .eng.srt if configured
+            # (These are handled by main.py after translation completes)
             log(f"Saved: {out_srt}")
 
             # 5. Better samples: first 2 dialogues, 2 middle, 1 longest
@@ -350,6 +354,19 @@ class Translator:
 
             elapsed = time.time() - t_start
             log(f"Complete! {total} lines in {elapsed:.1f}s")
+            # Apply translation memory corrections
+            tm_applied = 0
+            for i in range(total):
+                if clean[i] in Translator._tm_cache:
+                    translated[i] = Translator._tm_cache[clean[i]]
+                    tm_applied += 1
+            if tm_applied > 0:
+                log(f"Translation memory: {tm_applied} entries applied")
+                subs2 = pysrt.open(out_srt, encoding="utf-8")
+                for i, s in enumerate(subs2):
+                    if i < len(translated) and translated[i].strip():
+                        s.text = translated[i]
+                subs2.save(out_srt, encoding="utf-8")
             update_fn(state="done", progress=total, total=total,
                       message=f"完成！{total}条，{elapsed:.0f}秒",
                       output=out_srt, samples=samples)

@@ -40,7 +40,7 @@ def load_config():
     except Exception:
         config = {"api_key": "", "base_url": "",
                   "model": "deepseek-v4-flash", "context_model": "deepseek-v4-pro",
-                  "batch_size": 12, "use_context": False, "webhook_url": "", "webhook_type": "wecom"}
+                  "batch_size": 12, "use_context": False, "webhook_url": "", "webhook_type": "weecom", "auto_cleanup": False, "bilingual": False}
     if config.get("api_key"):
         translator = Translator(config["api_key"], config["base_url"])
 
@@ -254,6 +254,115 @@ async def index():
         return HTMLResponse(f.read())
 
 
+# ── Bilingual SRT ──
+@app.get("/api/bilingual_srt")
+async def get_bilingual_srt(path: str = ""):
+    """生成双语字幕"""
+    import pysrt
+    real = map_path(path)
+    rp = str(real)
+    if rp.endswith('.chi.srt'):
+        base = rp[:-8]
+    elif rp.endswith('.eng.srt'):
+        base = rp[:-8]
+    else:
+        base = rp.rsplit('.', 1)[0]
+    chi_path = base + '.chi.srt'
+    eng_path = base + '.eng.srt'
+    if not os.path.exists(chi_path) or not os.path.exists(eng_path):
+        raise HTTPException(404, "字幕文件不存在")
+    
+    chi = pysrt.open(chi_path, encoding='utf-8')
+    eng = pysrt.open(eng_path, encoding='utf-8')
+    n = min(len(chi), len(eng))
+    content = ''
+    for i in range(n):
+        s = chi[i]
+        e = eng[i]
+        content += f'{e.start.to_srt_timestamp()} --> {e.end.to_srt_timestamp()}\n'
+        content += f'{e.text.strip()}\n'
+        content += f'{s.text.strip()}\n'
+        content += '\n'
+    from fastapi import PlainTextResponse
+    return PlainTextResponse(content, media_type='text/plain')
+
+
+# ── Global Search & Replace ──
+class SearchReplaceRequest(BaseModel):
+    srt_path: str
+    search: str
+    replace: str
+    encoding: str = 'utf-8'
+
+@app.post("/api/search_replace")
+async def global_search_replace(req: SearchReplaceRequest):
+    """全局搜索替换字幕内容"""
+    import pysrt
+    real = map_path(req.srt_path)
+    if not os.path.exists(real):
+        raise HTTPException(404, "文件不存在")
+    
+    subs = pysrt.open(real, encoding='utf-8')
+    count = 0
+    for s in subs:
+        if req.search in s.text:
+            s.text = s.text.replace(req.search, req.replace)
+            count += 1
+    subs.save(real, encoding='utf-8')
+    return {"ok": True, "count": count}
+
+
+# ── Translation Stats ──
+@app.get("/api/stats")
+async def get_stats():
+    """翻译统计"""
+    history_data = []
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE) as f:
+                history_data = json.load(f)
+        except Exception:
+            pass
+    
+    total_tasks = len(history_data)
+    total_lines = 0
+    animes = {}
+    
+    for h in history_data:
+        anime = h.get('anime_name', h.get('video', '').split('/')[-1])
+        animes[anime] = animes.get(anime, 0) + 1
+        total_lines += h.get('total', 0)
+    
+    # Cache stats
+    cache_count = len(Translator._guide_cache)
+    cache_size = sum(len(v) for v in Translator._guide_cache.values())
+    
+    return {
+        "total_tasks": total_tasks,
+        "total_lines": total_lines,
+        "animes": animes,
+        "guide_cache_count": cache_count,
+        "guide_cache_size": cache_size
+    }
+
+
+# ── Auto cleanup setting ──
+@app.post("/api/cleanup_eng_srt")
+async def cleanup_eng_srt(path: str = ""):
+    """翻译后自动清理 .eng.srt 文件"""
+    real = map_path(path)
+    rp = str(real)
+    if rp.endswith('.chi.srt'):
+        base = rp[:-8]
+    else:
+        base = rp.rsplit('.', 1)[0]
+    eng_path = base + '.eng.srt'
+    if os.path.exists(eng_path):
+        os.remove(eng_path)
+        return {"ok": True, "deleted": eng_path}
+    return {"ok": False, "message": "文件不存在"}
+
+
 # ── Config ──
 
 class ConfigUpdate(BaseModel):
@@ -263,6 +372,8 @@ class ConfigUpdate(BaseModel):
     context_model: str = "deepseek-v4-pro"
     batch_size: int = 12
     use_context: bool = False
+    auto_cleanup: bool = False
+    bilingual: bool = False
     webhook_url: str = ""
     webhook_type: str = "wecom"
 
@@ -394,6 +505,38 @@ async def start_translate(req: TranslateRequest):
                 task[k] = v
         if kw.get("state") == "done":
             _add_history(task)
+            # Auto generate bilingual SRT
+            if config.get("bilingual", False) and task.get("output"):
+                try:
+                    real = map_path(task["output"])
+                    rp = str(real)
+                    base = rp[:-8] if rp.endswith('.chi.srt') else rp.rsplit('.', 1)[0]
+                    eng_path = base + '.eng.srt'
+                    chi_path = base + '.chi.srt'
+                    bil_path = base + '.bilingual.srt'
+                    if os.path.exists(eng_path) and os.path.exists(chi_path):
+                        import pysrt
+                        chi = pysrt.open(chi_path, encoding='utf-8')
+                        eng = pysrt.open(eng_path, encoding='utf-8')
+                        n = min(len(chi), len(eng))
+                        for i in range(n):
+                            chi[i].text = eng[i].text.strip() + '\n' + chi[i].text.strip()
+                        chi.save(bil_path, encoding='utf-8')
+                        task["logs"].append("[ok] Bilingual SRT generated")
+                except Exception as e:
+                    task["logs"].append(f"[error] Bilingual failed: {e}")
+            # Auto cleanup .eng.srt
+            if config.get("auto_cleanup", False) and task.get("output"):
+                try:
+                    real = map_path(task["output"])
+                    rp = str(real)
+                    base = rp[:-8] if rp.endswith('.chi.srt') else rp.rsplit('.', 1)[0]
+                    eng_path = base + '.eng.srt'
+                    if os.path.exists(eng_path):
+                        os.remove(eng_path)
+                        task["logs"].append("[ok] Cleaned up .eng.srt")
+                except Exception:
+                    pass
 
     def run():
         try:

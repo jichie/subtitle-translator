@@ -359,7 +359,9 @@ async function openSrtFile(p){
   if(!d.entries){toast('No entries','err');return}
   let nm=p.split('/').pop();
   window._outPath=p;
-  let h=`<div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between"><span style="font-size:13px;color:var(--text2)">${esc(nm)} · ${d.total}条</span><div style="display:flex;gap:8px"><button onclick="saveEdits('${esc(p)}')" style="padding:6px 14px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--accent);color:#fff">保存</button><a href="${API}/download?path=${encodeURIComponent(p)}" download style="padding:6px 14px;border:1px solid var(--accent);border-radius:8px;font-size:12px;font-weight:500;text-decoration:none;color:var(--accent)">下载</a></div></div>`;
+  let h=`<div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between"><span style="font-size:13px;color:var(--text2)">${esc(nm)} · ${d.total}条</span><div style="display:flex;gap:8px"><button onclick="saveEdits('${esc(p)}')" style="padding:6px 14px;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--accent);color:#fff">保存</button><button onclick="downloadBilingual('${esc(p)}')" style="padding:6px 14px;border:1px solid var(--accent);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:transparent;color:var(--accent)">双语字幕</button>
+        <a href="${API}/download?path=${encodeURIComponent(p)}" download style="padding:6px 14px;border:1px solid var(--accent);border-radius:8px;font-size:12px;font-weight:500;text-decoration:none;color:var(--accent)">下载</a>
+        <button onclick="showSearchReplace()" id="btn-search" style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;background:var(--surface2);color:var(--text2)">搜索替换</button></div></div>`;
   h+=`<div class="samples-grid" style="grid-template-columns:1fr">`;
   window._origSamples=d.entries.map((e,i)=>({index:i,en:"",zh:e.text}));
   d.entries.forEach((e,i)=>{h+=`<div class="sample-card" style="padding:10px 14px;display:flex;align-items:center;gap:10px"><div style="min-width:28px;font-size:10px;color:var(--text4);text-align:right">${i}</div><div style="flex:1"><input class="edit-input" data-idx="${i}" value="${esc(e.text)}" style="width:100%;padding:5px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);font-family:var(--font);outline:none" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></div></div>`;});
@@ -484,6 +486,14 @@ $('panel-'+n)?.classList.add('active');
 if(n==='history')loadHistory();if(n==='watch')loadWatch()}
 
 // ═══ CONTEXT ═══
+async function toggleBilingual(){
+  let v=document.getElementById('bilingual-switch').checked;
+  try{await fetch(API+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bilingual:v})});}catch(e){}
+}
+async function toggleCleanup(){
+  let v=document.getElementById('auto-cleanup-switch').checked;
+  try{await fetch(API+'/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auto_cleanup:v})});}catch(e){}
+}
 async function toggleContext(){let v=$('ctx-switch').checked;
 try{await fetch(`${API}/config`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({use_context:v})});toast(v?'上下文模式已开启':'上下文模式已关闭','ok')}catch(e){}}
 
@@ -738,6 +748,59 @@ async function stopTranslation(){
   $('log-badge').style.display='none';
 }
 
+
+// ═══ BILINGUAL + SEARCH + STATS ═══
+async function downloadBilingual(path){
+  try{
+    var r=await fetch(API+'/bilingual_srt?path='+encodeURIComponent(path));
+    if(!r.ok){toast('双语字幕生成失败','err');return}
+    var text=await r.text();
+    var blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=path.split('/').pop().replace('.chi.srt','.bilingual.srt');
+    a.click();
+    toast('双语字幕已下载','ok');
+  }catch(e){toast('失败: '+e.message,'err')}
+}
+
+function showSearchReplace(){
+  var h='<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center"><input type="text" id="sr-search" placeholder="搜索..." style="flex:1;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text);font-family:var(--font);outline:none"><input type="text" id="sr-replace" placeholder="替换为..." style="flex:1;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text);font-family:var(--font);outline:none"><button onclick="doSearchReplace()" style="padding:8px 16px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:500;cursor:pointer">替换</button></div>';
+  $('panel-samples').insertAdjacentHTML('afterbegin',h);
+  document.getElementById('sr-search').focus();
+}
+
+async function doSearchReplace(){
+  var search=document.getElementById('sr-search').value;
+  var replace=document.getElementById('sr-replace').value;
+  if(!search){toast('请输入搜索内容','err');return}
+  try{
+    var r=await fetch(API+'/search_replace',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({srt_path:window._outPath,search:search,replace:replace})});
+    var d=await r.json();
+    if(d.ok){
+      toast('已替换 '+d.count+' 处','ok');
+      openHistoryEditor(window._outPath, detectedAnime||'');
+    }
+  }catch(e){toast('替换失败: '+e.message,'err')}
+}
+
+async function loadStats(){
+  try{
+    var r=await fetch(API+'/stats');var d=await r.json();
+    var h='<div style="padding:20px"><h3 style="margin-bottom:16px">翻译统计</h3>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">';
+    h+='<div style="padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:12px"><div style="font-size:24px;font-weight:700;color:var(--accent)">'+d.total_tasks+'</div><div style="font-size:11px;color:var(--text3)">翻译任务</div></div>';
+    h+='<div style="padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:12px"><div style="font-size:24px;font-weight:700;color:var(--accent)">'+d.total_lines+'</div><div style="font-size:11px;color:var(--text3)">翻译行数</div></div>';
+    h+='<div style="padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:12px"><div style="font-size:24px;font-weight:700;color:var(--accent)">'+d.guide_cache_count+'</div><div style="font-size:11px;color:var(--text3)">缓存指南</div></div>';
+    h+='<div style="padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:12px"><div style="font-size:24px;font-weight:700;color:var(--accent)">'+d.guide_cache_size+'</div><div style="font-size:11px;color:var(--text3)">指南字符</div></div>';
+    h+='</div>';
+    h+='<h4 style="margin-bottom:8px">番剧翻译次数</h4>';
+    for(var k in d.animes){h+='<div style="padding:6px 0;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border)">'+esc(k)+' <span style="color:var(--text4)">×'+d.animes[k]+'</span></div>'}
+    h+='</div>';
+    $('panel-samples').innerHTML=h;
+  }catch(e){toast('统计加载失败','err')}
+}
 
 // ═══ UTILS ═══
 function toast(m,c){let e=document.createElement('div');e.className=`toast ${c||''}`;e.textContent=m;$('toast-wrap').appendChild(e);setTimeout(()=>e.remove(),3000)}
@@ -1005,7 +1068,12 @@ function updateThemeIcons(dark){
 }
 
 // ═══ INIT ═══
-// Sync context toggle from backend config
+// Sync settings from backend config
+fetch(API+'/config').then(function(r){return r.json();}).then(function(c){
+  var ctxToggle=document.getElementById('ctx-switch');if(ctxToggle)ctxToggle.checked=c.use_context||false;
+  var biToggle=document.getElementById('bilingual-switch');if(biToggle)biToggle.checked=c.bilingual||false;
+  var cleanToggle=document.getElementById('auto-cleanup-switch');if(cleanToggle)cleanToggle.checked=c.auto_cleanup||false;
+}).catch(function(){});
 fetch(API+'/config').then(function(r){return r.json();}).then(function(c){
   var ctxToggle=document.getElementById('ctx-switch');
   if(ctxToggle)ctxToggle.checked=c.use_context||false;
