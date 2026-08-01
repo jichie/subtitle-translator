@@ -1,4 +1,4 @@
-import json, os, re, subprocess, time, threading
+import json, os, re, subprocess, time, threading, urllib.request, urllib.parse
 from pathlib import Path
 from typing import Optional
 
@@ -104,6 +104,110 @@ class Translator:
         text = re.sub(r'(?<!\d)\.(?!\d)', '', text)  # 删非数字间英文句点（例如句尾）
         return text
 
+    def _fetch_anime_info(self, anime_name: str, log_fn=None) -> dict:
+        """从中文维基/英文维基/百度百科查询番剧信息，返回 {summary: str, characters: list}"""
+        result = {"summary": "", "characters": []}
+
+        # 代理配置
+        proxy_url = os.environ.get("HTTP_PROXY", "http://172.17.0.1:7890")
+        proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        proxy_opener = urllib.request.build_opener(proxy)
+        UA = {"User-Agent": "SubtitleTranslator/1.0"}
+
+        def wiki_extract(lang, name):
+            """从指定语言维基百科获取摘要和角色名"""
+            try:
+                # 搜索
+                search_url = (
+                    f"https://{lang}.wikipedia.org/w/api.php"
+                    f"?action=query&list=search&srsearch={urllib.parse.quote(name)}"
+                    f"&format=json&srlimit=1"
+                )
+                data = json.loads(proxy_opener.open(
+                    urllib.request.Request(search_url, headers=UA), timeout=10).read())
+                pages = data.get("query", {}).get("search", [])
+                if not pages:
+                    return ""
+                pid = pages[0]["pageid"]
+                # 摘要
+                extract_url = (
+                    f"https://{lang}.wikipedia.org/w/api.php"
+                    f"?action=query&prop=extracts&exintro=1"
+                    f"&pageids={pid}&format=json&explaintext=1"
+                )
+                data2 = json.loads(proxy_opener.open(
+                    urllib.request.Request(extract_url, headers=UA), timeout=10).read())
+                for _, pd in data2.get("query", {}).get("pages", {}).items():
+                    extract = pd.get("extract", "")
+                    if extract:
+                        # 提取角色名
+                        if lang == "zh":
+                            # 中文：匹配「名字」或《名字》模式
+                            chars = list(dict.fromkeys(
+                                re.findall(r'[「]([一-鿿·]{2,8})[」]', extract)
+                            ))
+                            result["characters"] = chars[:15]
+                        else:
+                            # 英文：匹配大写人名模式
+                            non_char = {
+                                "Japanese", "English", "The Series", "Attack On",
+                                "In The", "It Is", "They Are", "He Is", "She Is",
+                                "New York", "South Korea", "North America",
+                                "United States", "The Story", "The Manga", "The Anime",
+                                "Weekly Shonen", "Hajime Isayama", "Season One",
+                                "The First", "The Second", "The Third", "The World",
+                                "Manga Series", "Anime Series", "Anime Television",
+                                "Titan Manga", "During The", "After The",
+                            }
+                            chars = list(dict.fromkeys(
+                                n for n in re.findall(
+                                    r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)', extract
+                                )
+                                if n not in non_char and len(n) > 3
+                            ))[:15]
+                            if chars:
+                                result["characters"] = chars
+                        return extract.strip()
+            except Exception:
+                return ""
+            return ""
+
+        # ── 1. 中文维基（角色名最准确） ──
+        zh_extract = wiki_extract("zh", anime_name)
+        if zh_extract and len(zh_extract) > 100:
+            result["summary"] = zh_extract[:2000]
+            if log_fn: log_fn(f"ZH Wiki: {len(result['summary'])} chars, {len(result.get('characters',[]))} chars")
+
+        # ── 2. 英文维基（补充信息） ──
+        if not result["summary"] or len(result["summary"]) < 200:
+            en_extract = wiki_extract("en", anime_name)
+            if en_extract:
+                if not result["summary"]:
+                    result["summary"] = en_extract[:2000]
+                    if log_fn: log_fn(f"EN Wiki: {len(result['summary'])} chars")
+
+        # ── 3. 百度百科（最后兜底） ──
+        if not result["summary"] or len(result["summary"]) < 100:
+            try:
+                encoded = urllib.parse.quote(anime_name)
+                baidu_url = f"https://baike.baidu.com/item/{encoded}"
+                req = urllib.request.Request(baidu_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "text/html", "Accept-Language": "zh-CN,zh;q=0.9",
+                    "Referer": "https://www.baidu.com/",
+                })
+                content = proxy_opener.open(req, timeout=10).read().decode("utf-8", errors="ignore")
+                m = re.search(r'class="lemma-summary"[^>]*>(.*?)</div>', content, re.DOTALL)
+                if m:
+                    import html
+                    summary = re.sub(r'<[^>]+>', '', m.group(1))
+                    result["summary"] = re.sub(r'\[\d+\]', '',
+                        html.unescape(summary).strip())[:2000]
+                    if log_fn: log_fn(f"Baidu Baike: {len(result['summary'])} chars")
+            except Exception as e:
+                if log_fn: log_fn(f"Baidu Baike failed: {e}")
+
+        return result
     def generate_guide(self, anime_name: str, context_model: str, log_fn=None, force=False) -> str:
         """生成翻译指南（同一番剧只生成一次，缓存复用）"""
         # 查缓存（带锁）
@@ -116,6 +220,17 @@ class Translator:
                 else:
                     if log_fn: log_fn(f"Skipping empty cache ({len(cached)} chars), regenerating...")
 
+        # 先查百科获取真实角色名和故事背景
+        if log_fn:
+            log_fn(f"Searching Baidu/Wikipedia for: {anime_name}")
+        anime_info = self._fetch_anime_info(anime_name, log_fn=log_fn)
+        info_parts = []
+        if anime_info.get("summary"):
+            info_parts.append(f"【百科/维基摘要】\n{anime_info['summary']}")
+        if anime_info.get("characters"):
+            info_parts.append(f"【已知角色列表】\n{', '.join(anime_info['characters'])}")
+        grounding_text = "\n\n".join(info_parts) if info_parts else ""
+
         prompt = (
             f"为番剧《{anime_name}》生成翻译风格指南。直接输出指南内容。\n"
             "必须包含：作品介绍（故事背景）、主要角色名字及语气区别、关键名词译法、翻译禁忌。\n"
@@ -123,6 +238,8 @@ class Translator:
             "按以下结构输出：1.作品介绍（故事背景和主要角色名）2.整体风格基调 3.主要角色语气区别 4.关键名词译法 5.特殊表达处理 6.翻译禁忌。\n"
             "注意：翻译日本称呼时不要直接写\u201c桑\u201d，应根据角色身份译为先生/小姐/同学或直接省略。"
         )
+        if grounding_text:
+            prompt += f"\n\n【参考资料】以下信息来自百科/维基，角色名和剧情必须以此为准，不要编造：\n{grounding_text}"
         try:
             if log_fn: log_fn(f"Calling {context_model}...")
             r = self.client.chat.completions.create(
