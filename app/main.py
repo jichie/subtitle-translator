@@ -917,3 +917,179 @@ async def download(path: str):
         raise HTTPException(404, "文件不存在")
     return FileResponse(real, filename=os.path.basename(real),
                         media_type="application/octet-stream")
+
+
+# ── New Frontend API Endpoints (v1.3) ──
+
+@app.get("/api/logs")
+async def api_logs(path: str = ""):
+    """返回翻译日志 - 新前端 dashboard 使用"""
+    logs = []
+    # 如果指定了 path，返回对应视频的日志
+    if path:
+        for t in tasks.values():
+            if t.get("video") and path in str(t.get("video", "")):
+                logs.extend(t.get("logs", []))
+    else:
+        # 返回所有近期活跃任务的日志
+        for t in list(tasks.values())[-5:]:
+            logs.extend(t.get("logs", []))
+    return {"logs": logs[-200:]}
+
+
+@app.get("/api/subscriptions")
+async def api_subscriptions():
+    """返回订阅列表 - 新前端 dashboard 使用"""
+    subs = []
+    for fpath, info in watch_folders.items():
+        subs.append({
+            "path": fpath,
+            "enabled": info.get("enabled", True),
+            "last_scan": info.get("last_scan", 0),
+        })
+    return {"subscriptions": subs}
+
+
+@app.get("/api/guide")
+async def api_guide(path: str = "", force: bool = False):
+    """生成/获取翻译指南（GET 版本）- 新前端使用"""
+    if not translator:
+        raise HTTPException(400, "请先配置 API")
+    if not path:
+        raise HTTPException(400, "path 参数必填")
+    real = map_path(path)
+    anime = detect_anime_name(real)
+    if not anime:
+        raise HTTPException(400, "无法识别番剧名，请手动输入")
+    if not force and anime in Translator._guide_cache and len(Translator._guide_cache[anime].strip()) > 10:
+        return {"ok": True, "guide": Translator._guide_cache[anime], "cached": True}
+    try:
+        guide = translator.generate_guide(anime, config.get("context_model", "deepseek-v4-pro"), force=force)
+        return {"ok": True, "guide": guide, "cached": False}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/video_info")
+async def api_video_info(path: str = ""):
+    """返回视频信息（含字幕流）- 新前端使用"""
+    if not path:
+        raise HTTPException(400, "path 参数必填")
+    real = map_path(path)
+    if not os.path.exists(real):
+        raise HTTPException(404, "文件不存在")
+    result = {
+        "path": real,
+        "filename": Path(real).name,
+        "exists": True,
+        "subtitle_tracks": [],
+        "anime_name": detect_anime_name(real),
+    }
+    if translator:
+        tracks = translator.list_tracks(real)
+        result["subtitle_tracks"] = [
+            {"index": t["index"], "language": t["language"], "title": t.get("title", "")}
+            for t in tracks
+        ]
+    # 检查是否已翻译
+    chi = str(Path(real).parent / f"{Path(real).stem}.chi.srt")
+    result["has_chinese"] = os.path.exists(chi)
+    return result
+
+
+@app.get("/api/progress")
+async def api_progress():
+    """返回当前活跃翻译任务进度 - 新前端 dashboard 轮询使用"""
+    active = []
+    for t in tasks.values():
+        if t.get("state") not in ("done", "error", "cancelled"):
+            active.append({
+                "task_id": t.get("task_id", ""),
+                "video": str(Path(t.get("video", "")).name) if t.get("video") else "",
+                "state": t.get("state", "?"),
+                "progress": t.get("progress", 0),
+                "total": t.get("total", 0),
+                "message": t.get("message", ""),
+            })
+    return {"active": active, "count": len(active)}
+
+
+class BatchRequest(BaseModel):
+    paths: list = []
+    target_lang: str = "zh"
+    overwrite: bool = False
+
+@app.post("/api/batch")
+async def api_batch(req: BatchRequest):
+    """批量翻译（POST 版本）- 新前端使用"""
+    if not translator:
+        raise HTTPException(400, "请先配置 API")
+    if not req.paths:
+        return {"message": "没有需要翻译的文件", "tasks": []}
+
+    submitted = []
+    for p in req.paths:
+        try:
+            real = map_path(p)
+        except ValueError:
+            continue
+        if not os.path.exists(real):
+            continue
+        # 检查是否已有翻译（除非 overwrite）
+        chi = str(Path(real).parent / f"{Path(real).stem}.chi.srt")
+        if os.path.exists(chi) and not req.overwrite:
+            continue
+        anime = detect_anime_name(real)
+        tid = str(uuid.uuid4())[:8]
+        task = {"task_id": tid, "video": real, "anime_name": anime,
+                "state": "queued", "progress": 0, "total": 0,
+                "message": "排队中", "logs": [], "guide": None,
+                "output": None, "samples": [], "source": "batch"}
+        tasks[tid] = task
+        submitted.append(tid)
+
+        tracks = translator.list_tracks(real)
+        eng = next((t for t in tracks if t["language"] in ("eng", "en", "en-US", "en-GB")), None)
+        track_idx = eng["index"] if eng else (tracks[0]["index"] if tracks else 0)
+
+        def make_fn(t):
+            def fn(**kw):
+                if kw.get("check_cancelled"):
+                    return t.get("state") in ("cancelled", "error")
+                if t.get("state") == "cancelled":
+                    return True
+                for k, v in kw.items():
+                    if k == "log":
+                        t.setdefault("logs", []).append(f"[{t.get('state','?')}] {v}")
+                    elif k in t:
+                        t[k] = v
+                if kw.get("state") == "done":
+                    _add_history(t)
+            return fn
+
+        def run_trans(t, vpath, tidx, an):
+            try:
+                translator.run_translation(
+                    vpath, tidx, an, config["model"], config["context_model"],
+                    config["batch_size"], config.get("use_context", False), make_fn(t))
+            except Exception as e:
+                t["state"] = "error"
+                t["message"] = str(e)
+                t.setdefault("logs", []).append(f"[error] {e}")
+
+        executor.submit(run_trans, task, real, track_idx, anime)
+
+    return {"message": f"已提交 {len(submitted)} 个翻译任务", "tasks": submitted}
+
+
+class UnsubscribeRequest(BaseModel):
+    path: str = ""
+
+@app.post("/api/unsubscribe")
+async def api_unsubscribe(req: UnsubscribeRequest):
+    """取消订阅（POST 版本）- 新前端使用"""
+    if req.path in watch_folders:
+        watch_folders.pop(req.path, None)
+        save_watch()
+        return {"ok": True}
+    return {"ok": False, "error": "未找到该订阅"}
