@@ -127,7 +127,7 @@ class Translator:
                     urllib.request.Request(search_url, headers=UA), timeout=10).read())
                 pages = data.get("query", {}).get("search", [])
                 if not pages:
-                    return ""
+                    return "", ""
                 pid = pages[0]["pageid"]
                 # 摘要
                 extract_url = (
@@ -139,6 +139,7 @@ class Translator:
                     urllib.request.Request(extract_url, headers=UA), timeout=10).read())
                 for _, pd in data2.get("query", {}).get("pages", {}).items():
                     extract = pd.get("extract", "")
+                    page_title = pd.get("title", "")
                     if extract:
                         # 提取角色名
                         if lang == "zh":
@@ -167,21 +168,28 @@ class Translator:
                             ))[:15]
                             if chars:
                                 result["characters"] = chars
-                        return extract.strip()
+                        return extract.strip(), page_title
             except Exception:
-                return ""
-            return ""
+                return "", ""
+            return "", ""
 
         # ── 1. 中文维基（角色名最准确） ──
-        zh_extract = wiki_extract("zh", anime_name)
+        zh_extract, zh_title = wiki_extract("zh", anime_name)
         if zh_extract and len(zh_extract) > 100:
             result["summary"] = zh_extract[:2000]
-            if log_fn: log_fn(f"ZH Wiki: {len(result['summary'])} chars, {len(result.get('characters',[]))} chars")
+            chars = self._wiki_char_section("zh", zh_title)
+            if chars:
+                result["characters"] = chars
+            if log_fn: log_fn(f"ZH Wiki: {len(result['summary'])} chars, {len(result.get('characters',[]))} names")
 
         # ── 2. 英文维基（补充信息） ──
         if not result["summary"] or len(result["summary"]) < 200:
-            en_extract = wiki_extract("en", anime_name)
+            en_extract, en_title = wiki_extract("en", anime_name)
             if en_extract:
+                if not result.get("characters"):
+                    chars = self._wiki_char_section("en", en_title)
+                    if chars:
+                        result["characters"] = chars
                 if not result["summary"]:
                     result["summary"] = en_extract[:2000]
                     if log_fn: log_fn(f"EN Wiki: {len(result['summary'])} chars")
@@ -208,6 +216,92 @@ class Translator:
                 if log_fn: log_fn(f"Baidu Baike failed: {e}")
 
         return result
+
+
+    def _wiki_char_section(self, lang, page_title):
+        """获取维基角色章节的角色名列表"""
+        try:
+            proxy_url = os.environ.get("HTTP_PROXY", "http://172.17.0.1:7890")
+            proxy = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+            opener = urllib.request.build_opener(proxy)
+            UA = {"User-Agent": "SubtitleTranslator/1.0"}
+
+            sec_url = f"https://{lang}.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(page_title)}&prop=sections&format=json"
+            req = urllib.request.Request(sec_url, headers=UA)
+            data = json.loads(opener.open(req, timeout=10).read())
+            sections = data.get("parse", {}).get("sections", [])
+            keywords = ["Characters", "Cast", "Main characters",
+                        "登場人物", "登场角色",
+                        "角色", "人物", "主要人物"]
+            char_idx = None
+            for s in sections:
+                line = s.get("line", "")
+                for kw in keywords:
+                    if kw in line:
+                        char_idx = s["index"]
+                        break
+                if char_idx is not None:
+                    break
+            if char_idx is None:
+                return []
+
+            wt_url = f"https://{lang}.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(page_title)}&prop=wikitext&section={char_idx}&format=json"
+            req2 = urllib.request.Request(wt_url, headers=UA)
+            data2 = json.loads(opener.open(req2, timeout=10).read())
+            wt = data2.get("parse", {}).get("wikitext", {}).get("*", "")
+
+            names = []
+
+            # 如果角色章节是 {{main|角色列表}} 跳转，跟踪子页面
+            main_match = re.search(r'\{\{main\|([^}]+)\}\}', wt)
+            if main_match and len(wt) < 200:
+                subpage = main_match.group(1).strip()
+                try:
+                    wt_url2 = f"https://{lang}.wikipedia.org/w/api.php?action=parse&page={urllib.parse.quote(subpage)}&prop=wikitext&format=json"
+                    req3 = urllib.request.Request(wt_url2, headers=UA)
+                    data3 = json.loads(opener.open(req3, timeout=10).read())
+                    wt = data3.get("parse", {}).get("wikitext", {}).get("*", "") or wt
+                except Exception:
+                    pass
+
+            if lang == "zh":
+                for m in re.finditer(r';[^\n]*?\[\[([^\]]+)\]\]', wt):
+                    name = m.group(1).strip()
+                    if 2 <= len(name) <= 12 and not re.search(r'[|#<>{}]', name):
+                        names.append(name)
+                if not names and len(wt) < 5000:
+                    # 短页面兜底：用 [[...]] 取词但排除明显非角色词
+                    skip_words = ['日本', '漫畫', '動畫', '電影', '遊戲', '小說', '電視',
+                                  '系列', '角色', '列表', '官方', '網站', '參考', '來源',
+                                  '註釋', '外部', '連結', '模板', '分類', '幫助',
+                                  '配音', '聲優', '演員', '製作', '導演', '編劇',
+                                  '主題曲', '片尾曲', '插曲', '原聲', '單曲', '專輯',
+                                  '電視台', '頻道', '放送', '播出', '播放', '首播',
+                                  '書店', '出版社', '雜誌', '週刊', '月刊',
+                                  '日語', '英語', '中文', '國語', '粵語',
+                                  '人類', '男性', '女性', '世界', '故事',
+                                  '進擊的巨人', '東京', '大阪', '日本放送協會', 'NHK']
+                    for m in re.finditer(r'\[\[([^\]]{2,12})\]\]', wt):
+                        name = m.group(1).strip()
+                        if name and len(name) >= 2 and name not in skip_words:
+                            if not re.search(r'[|#<>{}:/\\.\d]', name):
+                                names.append(name)
+                    # 只取前15个
+                    names = names[:15]
+            else:
+                for m in re.finditer(r'^;\s*(.+?)(?:\n|$)', wt, re.MULTILINE):
+                    name = m.group(1).strip()
+                    if 2 <= len(name) <= 40 and not re.search(r'[|{}\[\]=<>]', name):
+                        names.append(name)
+                if not names:
+                    bold_re = re.compile(r"'{3}([^']{2,40})'{3}")
+                    for m in bold_re.finditer(wt):
+                        name = m.group(1).strip()
+                        if not re.search(r'[|{}\[\]=<>]', name):
+                            names.append(name)
+            return list(dict.fromkeys(names))[:25]
+        except Exception:
+            return []
     def generate_guide(self, anime_name: str, context_model: str, log_fn=None, force=False) -> str:
         """生成翻译指南（同一番剧只生成一次，缓存复用）"""
         # 查缓存（带锁）
@@ -471,22 +565,6 @@ class Translator:
 
             elapsed = time.time() - t_start
             log(f"Complete! {total} lines in {elapsed:.1f}s")
-            # Apply translation memory corrections
-            try:
-                tm_applied = 0
-                for i in range(total):
-                    if clean[i] in Translator._tm_cache:
-                        translated[i] = Translator._tm_cache[clean[i]]
-                        tm_applied += 1
-                if tm_applied > 0:
-                    log(f"Translation memory: {tm_applied} entries applied")
-                    subs2 = pysrt.open(out_srt, encoding="utf-8")
-                    for i, s in enumerate(subs2):
-                        if i < len(translated) and translated[i].strip():
-                            s.text = translated[i]
-                    subs2.save(out_srt, encoding="utf-8")
-            except Exception as tm_err:
-                log(f"Translation memory error: {tm_err}")
             update_fn(state="done", progress=total, total=total,
                       message=f"完成！{total}条，{elapsed:.0f}秒",
                       output=out_srt, samples=samples)
@@ -568,7 +646,9 @@ def map_path(web_path: str) -> str:
         p = p.lstrip("/")
     # Resolve to real path and validate it stays within VIDEO_ROOT
     real = os.path.realpath(os.path.join(VIDEO_ROOT, p))
-    if not real.startswith(os.path.realpath(VIDEO_ROOT)):
+    root = os.path.realpath(VIDEO_ROOT)
+    # 必须整段匹配目录（加 os.sep），否则 /videos2 这类前缀相同路径会绕过校验
+    if real != root and not real.startswith(root + os.sep):
         raise ValueError(f"Path traversal detected: {web_path}")
     return real
 

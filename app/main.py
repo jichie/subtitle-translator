@@ -19,6 +19,12 @@ from .translator import VIDEO_ROOT, DATA_DIR
 app = FastAPI(title="字幕翻译器")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+# 静态资源（style.css / app.js 等）
+from fastapi.staticfiles import StaticFiles
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 executor = ThreadPoolExecutor(max_workers=5)
 tasks: dict[str, dict] = {}
 translator: Optional[Translator] = None
@@ -27,6 +33,8 @@ history: list[dict] = []
 watch_folders: dict[str, dict] = {}  # path -> {interval, last_scan, enabled}
 watch_thread: Optional[threading.Thread] = None
 _watch_stop = threading.Event()
+_watch_wake = threading.Event()       # 新增/启用订阅时置位，立即触发一轮扫描
+_watch_save_lock = threading.RLock()  # 可重入：端点与 save_watch 嵌套获取
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 HISTORY_FILE = os.path.join(DATA_DIR, "history.json")
@@ -38,11 +46,16 @@ def load_config():
     try:
         with open(CONFIG_FILE, encoding="utf-8") as f: config = json.load(f)
     except Exception:
-        config = {"api_key": "", "base_url": "",
-                  "model": "deepseek-v4-flash", "context_model": "deepseek-v4-pro",
-                  "batch_size": 12, "use_context": False, "webhook_url": "", "webhook_type": "weecom", "auto_cleanup": False, "bilingual": False}
+        config = {}
+    # 补齐缺失键，避免后续 .get 之外的直接下标访问 KeyError
+    defaults = {"api_key": "", "base_url": "",
+                "model": "deepseek-v4-flash", "context_model": "deepseek-v4-pro",
+                "batch_size": 12, "use_context": False, "webhook_url": "", "webhook_type": "wecom",
+                "auto_cleanup": False, "bilingual": False}
+    for k, v in defaults.items():
+        config.setdefault(k, v)
     if config.get("api_key"):
-        translator = Translator(config["api_key"], config["base_url"])
+        translator = Translator(config["api_key"], config.get("base_url") or None)
 
 
 def save_config():
@@ -61,7 +74,7 @@ def load_history():
 
 def save_history():
     with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(history[-200:], f, ensure_ascii=False, indent=2)  # keep last 200
+        json.dump(history[:200], f, ensure_ascii=False, indent=2)  # 新记录插在最前，保留最新 200 条
 
 
 def load_watch():
@@ -73,16 +86,29 @@ def load_watch():
 
 
 def save_watch():
-    with open(WATCH_FILE, "w", encoding="utf-8") as f:
-        json.dump(watch_folders, f, ensure_ascii=False, indent=2)
+    with _watch_save_lock:
+        with open(WATCH_FILE, "w", encoding="utf-8") as f:
+            json.dump(watch_folders, f, ensure_ascii=False, indent=2)
 
 
 def watch_loop():
-    """后台线程：定期扫描订阅文件夹"""
-    _failed_videos: set[str] = set()  # 记录失败的视频，避免重复尝试
-    while not _watch_stop.is_set():
-        if _watch_stop.wait(300):  # 5分钟，但可被 Event 打断
-            break
+    """后台线程：定期扫描订阅文件夹。
+
+    先扫描再等待：线程启动和每次唤醒（新增订阅）都会立即扫一轮，
+    之后每 5 分钟一轮。单次循环异常只记录日志，绝不杀死线程。
+    """
+    _fail_info: dict[str, tuple] = {}  # video -> (失败次数, 上次失败时间)
+    FAIL_MAX = 3          # 同一视频最多尝试 3 次，避免坏文件无限重试
+    FAIL_COOLDOWN = 1800  # 失败后冷却 30 分钟再重试（瞬时 API 错误可自愈）
+
+    def retry_due(v: str) -> bool:
+        attempts, last_ts = _fail_info.get(v, (0, 0.0))
+        return attempts < FAIL_MAX and time.time() - last_ts >= FAIL_COOLDOWN
+
+    def scan_once():
+        # 进行中的任务的视频集合：防止同一集被重复提交（翻译常超过一个扫描周期）
+        active_videos = {t.get("video") for t in list(tasks.values())
+                         if t.get("state") not in ("done", "error", "cancelled")}
         for fpath, info in list(watch_folders.items()):
             if not info.get("enabled", True):
                 continue
@@ -95,14 +121,17 @@ def watch_loop():
                 continue
             if not translator:
                 logger.warning("Watch: translator not configured, skipping scan")
-                break
+                continue
             videos = scan_videos(fpath)
             translated = set()
             for v in videos:
                 base = Path(v).stem
                 if os.path.exists(str(Path(v).parent / f"{base}.chi.srt")):
                     translated.add(v)
-            new_videos = [v for v in videos if v not in translated and v not in _failed_videos]
+            new_videos = [v for v in videos
+                          if v not in translated
+                          and v not in active_videos
+                          and retry_due(v)]
             if new_videos:
                 logger.info(f"Watch: found {len(new_videos)} new videos in {fpath}")
                 for v in new_videos[:3]:  # max 3 at a time
@@ -127,6 +156,7 @@ def watch_loop():
                                     t[k] = v
                             if kw.get("state") == "done":
                                 _add_history(t)
+                                _fail_info.pop(t["video"], None)  # 成功后重置失败计数
                         return fn
 
                     def run_trans(t):
@@ -137,15 +167,32 @@ def watch_loop():
                                 config["batch_size"], config.get("use_context", False),
                                 make_fn(t))
                         except Exception as e:
+                            if t.get("state") == "cancelled":
+                                t.setdefault("logs", []).append(f"[cancelled] {e}")
+                                _mark_task_done(t)
+                                return
                             t["state"] = "error"
                             t["message"] = str(e)
-                            t["logs"].append(f"[error] {e}")
-                            _failed_videos.add(t["video"])
+                            t.setdefault("logs", []).append(f"[error] {e}")
+                            _mark_task_done(t)
+                            attempts = _fail_info.get(t["video"], (0, 0.0))[0]
+                            _fail_info[t["video"]] = (attempts + 1, time.time())
                             logger.warning(f"Watch: translation failed for {Path(t['video']).name}: {e}")
 
                     executor.submit(run_trans, task)
-            watch_folders[fpath]["last_scan"] = time.time()
-            save_watch()
+            # 扫描期间订阅可能被删除，避免 KeyError
+            if fpath in watch_folders:
+                watch_folders[fpath]["last_scan"] = time.time()
+                save_watch()
+
+    while not _watch_stop.is_set():
+        try:
+            scan_once()
+        except Exception:
+            logger.exception("Watch: scan cycle error")  # 任何异常都不杀死扫描线程
+        # 等待唤醒（新增/启用订阅立即扫描）或超时进入下一轮
+        _watch_wake.wait(300)
+        _watch_wake.clear()
 
 
 def _send_webhook(task: dict):
@@ -185,6 +232,7 @@ def _add_history(task: dict):
         "source": task.get("source", "manual"),
     }
     history.insert(0, entry)
+    del history[200:]  # 内存中也只保留最新 200 条
     save_history()
     # 发送通知（在单独线程中）
     import threading
@@ -192,7 +240,7 @@ def _add_history(task: dict):
 
 
 def _cleanup_tasks_loop():
-    """定期清理已完成超过 1 小时的任务"""
+    """定期清理已完成超过 1 小时的任务（无任务时跳过文件操作）"""
     while True:
         time.sleep(600)  # 每 10 分钟清理一次
         now = time.time()
@@ -200,7 +248,7 @@ def _cleanup_tasks_loop():
                    if t.get("state") in ("done", "error", "cancelled")
                    and now - t.get("_done_time", now) > 3600]
         for tid in expired:
-            del tasks[tid]
+            tasks.pop(tid, None)
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired tasks")
 
@@ -217,7 +265,7 @@ load_watch()
 # Start watch thread
 if watch_folders:
     try:
-        watch_thread = threading.Thread(target=watch_loop, daemon=True)
+        watch_thread = threading.Thread(target=watch_loop, daemon=True, name="watch-loop")
         watch_thread.start()
     except Exception as e:
         logger.warning(f"Watch thread start failed: {e}")
@@ -329,7 +377,7 @@ async def get_stats():
     animes = {}
     
     for h in history_data:
-        anime = h.get('anime_name', h.get('video', '').split('/')[-1])
+        anime = h.get('anime') or h.get('anime_name') or h.get('video', '').split('/')[-1]
         animes[anime] = animes.get(anime, 0) + 1
         total_lines += h.get('total', 0)
     
@@ -366,16 +414,17 @@ async def cleanup_eng_srt(path: str = ""):
 # ── Config ──
 
 class ConfigUpdate(BaseModel):
-    api_key: str = ""
-    base_url: str = ""
-    model: str = "deepseek-v4-flash"
-    context_model: str = "deepseek-v4-pro"
-    batch_size: int = 12
-    use_context: bool = False
-    auto_cleanup: bool = False
-    bilingual: bool = False
-    webhook_url: str = ""
-    webhook_type: str = "wecom"
+    # 全部可选：前端开关只 POST 单个字段，未提供的字段不得覆盖已有配置
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    context_model: Optional[str] = None
+    batch_size: Optional[int] = None
+    use_context: Optional[bool] = None
+    auto_cleanup: Optional[bool] = None
+    bilingual: Optional[bool] = None
+    webhook_url: Optional[str] = None
+    webhook_type: Optional[str] = None
 
 
 @app.get("/api/config")
@@ -387,25 +436,30 @@ async def get_config():
 @app.post("/api/config")
 async def update_config(data: ConfigUpdate):
     global translator
-    if data.api_key and data.api_key != "***":
-        config["api_key"] = data.api_key
-    # 只更新非空字段，保留已有值
-    if data.base_url:
-        config["base_url"] = data.base_url
-    if data.model:
-        config["model"] = data.model
-    if data.context_model:
-        config["context_model"] = data.context_model
-    if data.batch_size and data.batch_size >= 5:
-        config["batch_size"] = data.batch_size
-    config["use_context"] = data.use_context
-    if data.webhook_url:
-        config["webhook_url"] = data.webhook_url
-    if data.webhook_type:
-        config["webhook_type"] = data.webhook_type
+    updates = data.model_dump(exclude_unset=True)
+    if updates.get("api_key") not in (None, "", "***"):
+        config["api_key"] = updates["api_key"]
+    if "base_url" in updates:
+        config["base_url"] = updates["base_url"]
+    if updates.get("model"):
+        config["model"] = updates["model"]
+    if updates.get("context_model"):
+        config["context_model"] = updates["context_model"]
+    if updates.get("batch_size") and updates["batch_size"] >= 5:
+        config["batch_size"] = updates["batch_size"]
+    if "use_context" in updates:
+        config["use_context"] = updates["use_context"]
+    if "auto_cleanup" in updates:
+        config["auto_cleanup"] = updates["auto_cleanup"]
+    if "bilingual" in updates:
+        config["bilingual"] = updates["bilingual"]
+    if "webhook_url" in updates:
+        config["webhook_url"] = updates["webhook_url"]
+    if "webhook_type" in updates:
+        config["webhook_type"] = updates["webhook_type"]
     save_config()
-    if config["api_key"]:
-        translator = Translator(config["api_key"], config["base_url"])
+    if config.get("api_key"):
+        translator = Translator(config["api_key"], config.get("base_url") or None)
     return {"ok": True}
 
 
@@ -419,9 +473,12 @@ def browse(path: str = "/", sort: str = "name"):
     entries = []
     for name in os.listdir(real_path):
         full = os.path.join(real_path, name)
-        is_dir = os.path.isdir(full)
-        ext = os.path.splitext(name)[1].lower() if not is_dir else ""
-        mtime = os.path.getmtime(full)
+        try:
+            is_dir = os.path.isdir(full)
+            ext = os.path.splitext(name)[1].lower() if not is_dir else ""
+            mtime = os.path.getmtime(full)
+        except OSError:
+            continue  # 扫描期间被删除/无权限的条目直接跳过
         entries.append({
             "name": name, "path": os.path.join(path, name).replace("//", "/"),
             "is_dir": is_dir,
@@ -545,9 +602,14 @@ async def start_translate(req: TranslateRequest):
                 config["model"], config["context_model"],
                 config["batch_size"], use_ctx, update)
         except Exception as e:
+            # 用户主动取消：保持 cancelled 状态，不覆盖为 error
+            if task.get("state") == "cancelled":
+                task["logs"].append(f"[cancelled] {e}")
+                return
             task["state"] = "error"
             task["message"] = str(e)
             task["logs"].append(f"[error] {e}")
+            _mark_task_done(task)
 
     executor.submit(run)
     return {"task_id": tid, "anime_name": anime}
@@ -615,9 +677,14 @@ def start_batch(req: TranslateRequest):
                     vpath, tidx, an, config["model"], config["context_model"],
                     config["batch_size"], ctx, make_fn(t))
             except Exception as e:
+                if t.get("state") == "cancelled":
+                    t.setdefault("logs", []).append(f"[cancelled] {e}")
+                    _mark_task_done(t)
+                    return
                 t["state"] = "error"
                 t["message"] = str(e)
-                t["logs"].append(f"[error] {e}")
+                t.setdefault("logs", []).append(f"[error] {e}")
+                _mark_task_done(t)
 
         executor.submit(run_trans, task, v, track_idx, anime, use_ctx)
         time.sleep(0.5)  # stagger
@@ -635,27 +702,35 @@ async def get_watch():
 @app.post("/api/watch/add")
 async def add_watch(path: str):
     global watch_thread
-    if path not in watch_folders:
-        watch_folders[path] = {"enabled": True, "last_scan": 0}
+    with _watch_save_lock:
+        if path not in watch_folders:
+            watch_folders[path] = {"enabled": True, "last_scan": 0}
         save_watch()
+    # 确保扫描线程存活（启动时无订阅则不会创建）
     if not watch_thread or not watch_thread.is_alive():
-        watch_thread = threading.Thread(target=watch_loop, daemon=True)
+        watch_thread = threading.Thread(target=watch_loop, daemon=True, name="watch-loop")
         watch_thread.start()
+    else:
+        _watch_wake.set()  # 立即扫描一轮，无需等 5 分钟
     return {"ok": True}
 
 
 @app.post("/api/watch/remove")
 async def remove_watch(path: str):
-    watch_folders.pop(path, None)
-    save_watch()
+    with _watch_save_lock:
+        watch_folders.pop(path, None)
+        save_watch()
     return {"ok": True}
 
 
 @app.post("/api/watch/toggle")
 async def toggle_watch(path: str):
-    if path in watch_folders:
-        watch_folders[path]["enabled"] = not watch_folders[path].get("enabled", True)
-        save_watch()
+    with _watch_save_lock:
+        if path in watch_folders:
+            watch_folders[path]["enabled"] = not watch_folders[path].get("enabled", True)
+            save_watch()
+    if watch_folders.get(path, {}).get("enabled", False):
+        _watch_wake.set()  # 重新启用也立即扫描
     return {"ok": True}
 
 
@@ -678,8 +753,8 @@ async def get_history():
 
 @app.get("/api/tasks_active")
 async def get_active():
-    return {"tasks": [{k: t.get(k) for k in ["task_id", "video", "state", "progress", "total", "message", "output"]}
-                      for t in tasks.values() if t.get("state") not in ("done", "error")]}
+    return {"tasks": [{k: t.get(k) for k in ["task_id", "video", "state", "progress", "total", "message", "output", "source"]}
+                      for t in tasks.values() if t.get("state") not in ("done", "error", "cancelled")]}
 
 
 # ── Download ──
@@ -857,9 +932,12 @@ async def task_cancel(task_id: str):
     task = tasks.get(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    if task.get("state") in ("done", "error", "cancelled"):
+        return {"ok": True, "message": "任务已结束"}
     task["state"] = "cancelled"
     task["message"] = "已手动中断"
-    task["logs"].append("[cancelled] 用户手动中断翻译")
+    task.setdefault("logs", []).append("[cancelled] 用户手动中断翻译")
+    _mark_task_done(task)
     return {"ok": True}
 
 
@@ -911,7 +989,7 @@ async def download(path: str):
     real = map_path(path)
     real = os.path.realpath(real)
     root = os.path.realpath(VIDEO_ROOT)
-    if not real.startswith(root):
+    if real != root and not real.startswith(root + os.sep):
         raise HTTPException(403, "访问被拒绝")
     if not os.path.exists(real):
         raise HTTPException(404, "文件不存在")
@@ -1073,9 +1151,14 @@ async def api_batch(req: BatchRequest):
                     vpath, tidx, an, config["model"], config["context_model"],
                     config["batch_size"], config.get("use_context", False), make_fn(t))
             except Exception as e:
+                if t.get("state") == "cancelled":
+                    t.setdefault("logs", []).append(f"[cancelled] {e}")
+                    _mark_task_done(t)
+                    return
                 t["state"] = "error"
                 t["message"] = str(e)
                 t.setdefault("logs", []).append(f"[error] {e}")
+                _mark_task_done(t)
 
         executor.submit(run_trans, task, real, track_idx, anime)
 
