@@ -1,5 +1,38 @@
 # 更新日志
 
+## [1.3.0] — 2026-10-14
+
+### 🌏 双语字幕支持（全新）
+
+四个维度全面支持双语：
+
+- **检测双语** — 浏览列表自动标记双语字幕（`双语` 标签）；`GET /api/bilingual_detect` 逐条统计双语行数。检测逻辑：条目同时含 CJK 文字与拉丁字母即视为双语行，抽样 ≥60% 判定为双语文件；常见双语命名（`.bilingual.srt`/`.chseng.srt` 等）直接识别。
+- **直接翻译出双语** — `POST /api/bilingual_translate`：传视频或字幕路径，翻译完成后自动生成 `.bilingual.srt`。前端「下载双语」在无翻译时会提示一键启动。
+- **双语源自动拆分（零 API 消耗）** — 翻译时检测到源字幕已是双语（如自带的中英双语字幕轨），跳过 AI 翻译直接拆分：生成中文单语版 `.chi.srt` + 原样双语版 `.bilingual.srt`。
+- **原字幕 + 翻译字幕合并双语** — `merge_to_bilingual()` 按**时间轴对齐**（开始时间差 <500ms 才配对，条目数不一致也不会错位）合并 `.eng.srt` + `.chi.srt` → `.bilingual.srt`。API：`POST /api/bilingual_merge`；前端「组双语」按钮。
+
+### 🟢 新增配置
+
+- `bilingual`（布尔）— 翻译时直接输出双语字幕（全局开关，顶栏「双语」toggle 或设置页）；手动/批量/订阅（Watch）翻译全部生效。
+- `bilingual_layout`（`orig_first`/`trans_first`）— 双语行序：原文在上（英上中下）或译文在上（中上英下）。
+
+### 🟢 新增 API 端点
+
+- `POST /api/bilingual_translate` — 直接翻译出双语字幕
+- `POST /api/bilingual_merge` — 原字幕+译文字幕合并为双语文件（保存到磁盘）
+- `GET /api/bilingual_detect` — 字幕文件双语检测（逐条统计）
+- `GET /api/bilingual_srt` 重构 — 支持 `layout` 参数；已有双语文件直接返回；无翻译时可返回 `NEED_TRANSLATE:` 提示前端引导翻译
+
+### 🔧 改进
+
+- `browse` / `scan_folder` / `video_info` 返回双语状态字段（`is_bilingual` / `has_bilingual`）
+- 批量扫描界面显示「N 个已双语」，双语视频标 `双语` 状态
+- 修复外挂字幕与 `.eng.srt` 同路径时 `shutil.copy2` 同文件复制报错
+- 翻译完成后的编辑器工具栏新增「组双语」「下载双语」按钮
+- 新增 `tests/test_bilingual.py`（28 项断言，覆盖检测/拆分/合并/短路全流程）
+
+---
+
 ## [1.2.0] — 2026-06-26
 
 ### 🔴 严重 Bug 修复

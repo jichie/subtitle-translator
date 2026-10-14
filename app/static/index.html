@@ -64,9 +64,14 @@
         <h2 id="main-title">选择视频文件</h2>
         <div class="sub" id="main-sub">左侧浏览目录或输入路径</div>
       </div>
-      <label class="ctx-toggle" title="启用上下文感知翻译（传入前后字幕作为语境）">
-        <input type="checkbox" id="ctx-switch" onchange="toggleContext()"><span class="track"></span>上下文
-      </label>
+      <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
+        <label class="ctx-toggle" title="翻译完成后自动生成双语字幕（.bilingual.srt）">
+          <input type="checkbox" id="bilingual-switch" onchange="toggleBilingual()"><span class="track"></span>双语
+        </label>
+        <label class="ctx-toggle" title="启用上下文感知翻译（传入前后字幕作为语境）">
+          <input type="checkbox" id="ctx-switch" onchange="toggleContext()"><span class="track"></span>上下文
+        </label>
+      </div>
     </header>
 
     <nav class="tabs">
@@ -140,6 +145,22 @@
     <div class="field"><label for="cfg-cmodel">分析模型（生成指南）</label><input type="text" id="cfg-cmodel"></div>
     <div class="field"><label for="cfg-model">翻译模型（批量翻译）</label><input type="text" id="cfg-model"></div>
     <div class="field"><label for="cfg-batch">每批条数</label><input type="number" id="cfg-batch" min="5" max="30"></div>
+    <div class="field">
+      <label for="cfg-bilingual" style="display:flex;align-items:center;justify-content:space-between">
+        <span>翻译时直接输出双语字幕</span>
+        <label class="ctx-toggle" style="font-size:11px">
+          <input type="checkbox" id="cfg-bilingual"><span class="track"></span>双语输出
+        </label>
+      </label>
+      <div style="font-size:11px;color:var(--text-4);margin-top:4px">完成后自动生成 .bilingual.srt（原文+译文）；源已是双语则自动拆分为中文字幕+双语字幕</div>
+    </div>
+    <div class="field">
+      <label for="cfg-bilingual-layout">双语字幕行序</label>
+      <select id="cfg-bilingual-layout">
+        <option value="orig_first">原文在上（英上中下）</option>
+        <option value="trans_first">译文在上（中上英下）</option>
+      </select>
+    </div>
     <div class="field">
       <label for="cfg-webhook">通知 Webhook URL（企业微信/钉钉）</label>
       <div style="display:flex;gap:8px">

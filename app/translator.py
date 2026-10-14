@@ -420,7 +420,8 @@ class Translator:
         return [""] * n
 
     def run_translation(self, video_path, track_index, anime_name, model,
-                        context_model, batch_size, use_context, update_fn) -> str:
+                        context_model, batch_size, use_context, update_fn,
+                        bilingual: bool = False) -> str:
         def log(msg): update_fn(log=msg)
         # Cancellation check helper
         def is_cancelled():
@@ -430,6 +431,7 @@ class Translator:
         parent = Path(video_path).parent
         eng_srt = str(parent / f"{base}.eng.srt")
         out_srt = str(parent / f"{base}.chi.srt")
+        bil_srt = str(parent / f"{base}.bilingual.srt")
 
         try:
                 # 1. Extract (优先内嵌字幕，fallback 到外挂 SRT)
@@ -458,12 +460,37 @@ class Translator:
                 if ext_srt:
                     log(f"Using external subtitle: {Path(ext_srt).name}")
                     import shutil
-                    shutil.copy2(ext_srt, eng_srt)
+                    if os.path.realpath(ext_srt) != os.path.realpath(eng_srt):
+                        shutil.copy2(ext_srt, eng_srt)
                     extraction_ok = True
                 else:
                     log("Extraction failed! No embedded or external subtitles found.")
                     raise RuntimeError("字幕提取失败：无内嵌字幕流，也未找到外挂字幕文件")
             log(f"Extracted: {Path(eng_srt).name}")
+
+            # ── 双语源短路：源字幕已是双语，直接拆分输出，无需调用 API ──
+            if detect_bilingual_srt(eng_srt):
+                log("Source is already bilingual, splitting directly...")
+                update_fn(state="analyzing", message="检测到双语字幕，直接拆分...")
+                subs = _open_srt_any_encoding(eng_srt)
+                total = len(subs)
+                samples = []
+                for i, s in enumerate(subs):
+                    latin, cjk = split_bilingual_lines(s.text)
+                    samples.append({"index": i, "en": latin.strip(), "zh": cjk.strip()})
+                # 保存中文单语版（供播放器/后续编辑使用）
+                for i, s in enumerate(subs):
+                    _, cjk = split_bilingual_lines(s.text)
+                    if cjk.strip():
+                        s.text = cjk.strip()
+                subs.save(out_srt, encoding="utf-8")
+                # 保存原样双语版
+                _open_srt_any_encoding(eng_srt).save(bil_srt, encoding="utf-8")
+                log(f"Bilingual source split: {total} lines -> {out_srt}")
+                update_fn(state="done", progress=total, total=total,
+                          message=f"完成！双语源直接拆分 {total}条",
+                          output=out_srt, samples=samples)
+                return out_srt
 
             # 尝试多种编码打开 SRT 文件
             for enc in ("utf-8", "utf-8-sig", "gbk", "latin-1", "shift-jis"):
@@ -546,7 +573,16 @@ class Translator:
                 if i < len(translated) and translated[i].strip():
                     s.text = translated[i]
             subs.save(out_srt, encoding="utf-8")
-            
+
+            # 双语输出：翻译完成后直接生成 原文+译文 合并版
+            if bilingual:
+                try:
+                    matched = merge_to_bilingual(eng_srt, out_srt, bil_srt,
+                                                 orig_first=True)
+                    log(f"Bilingual SRT generated ({matched}/{total} aligned): {bil_srt}")
+                except Exception as e:
+                    log(f"Bilingual generation failed: {e}")
+
             # Generate bilingual SRT if requested (handled by run_translation caller)
             # Auto cleanup .eng.srt if configured
             # (These are handled by main.py after translation completes)
@@ -582,6 +618,129 @@ class Translator:
         #     try:
         #         if os.path.exists(eng_srt): os.remove(eng_srt)
         #     except Exception: pass
+
+
+# ── 双语字幕支持 ──
+
+# 中日韩文字区间（用于双语检测）
+_CJK_RE = re.compile(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]')
+_LATIN_RE = re.compile(r'[A-Za-z]')
+# 已知的双语输出后缀（生成 .bilingual.srt 时跳过这些文件）
+BILINGUAL_SUFFIXES = (".bilingual.srt", ".bi.srt", ".dual.srt", ".chseng.srt",
+                      ".engchs.srt", ".zh-en.srt", ".zh.en.srt", ".sc-en.srt")
+
+
+def is_bilingual_text(text: str) -> bool:
+    """检测单条字幕文本是否同时含 CJK 文字与拉丁字母（典型：一行英文+一行中文）"""
+    return bool(_CJK_RE.search(text) and _LATIN_RE.search(text))
+
+
+def detect_bilingual_srt(srt_path: str, sample: int = 30) -> bool:
+    """检测 SRT 文件是否为双语字幕（抽样前 sample 条，>=60% 条目双语即判定）"""
+    try:
+        subs = _open_srt_any_encoding(srt_path)
+    except Exception:
+        return False
+    if not subs:
+        return False
+    step = max(1, len(subs) // sample)
+    checked = [subs[i].text for i in range(0, len(subs), step)][:sample]
+    hits = sum(1 for t in checked if is_bilingual_text(t))
+    return hits >= max(2, int(len(checked) * 0.6))
+
+
+def split_bilingual_lines(text: str) -> tuple[str, str]:
+    """把双语条目按行拆成 (latin_text, cjk_text)。
+
+    仅当文本同时含两种文字时拆分；多行时按「拉丁行 / CJK 行」分组拼接。
+    无法判断时返回 ("", text)。
+    """
+    if not is_bilingual_text(text):
+        return "", text
+    latin_lines, cjk_lines = [], []
+    for line in text.split("\n"):
+        has_cjk = bool(_CJK_RE.search(line))
+        has_latin = bool(_LATIN_RE.search(line))
+        if has_cjk and not has_latin:
+            cjk_lines.append(line.strip())
+        elif has_latin and not has_cjk:
+            latin_lines.append(line.strip())
+        elif has_cjk and has_latin:
+            # 单行内混合（如 "Hello 世界"），整行归入 CJK 侧，避免拆散
+            cjk_lines.append(line.strip())
+        # 纯标点/空白行丢弃
+    if latin_lines and cjk_lines:
+        return "\n".join(latin_lines), "\n".join(cjk_lines)
+    return "", text
+
+
+def _open_srt_any_encoding(srt_path: str):
+    """依次尝试常见编码打开 SRT，全部失败抛出最后一个异常"""
+    last_err = None
+    for enc in ("utf-8", "utf-8-sig", "gbk", "latin-1", "shift-jis"):
+        try:
+            return pysrt.open(srt_path, encoding=enc)
+        except Exception as e:
+            last_err = e
+    raise last_err
+
+
+def _ts_sort_key(item):
+    """pysrt 条目按开始时间排序的 key（跨 pysrt 版本兼容）"""
+    start = item[1].start
+    if hasattr(start, "ordinal"):
+        o = start.ordinal
+    else:
+        t = start.to_time()
+        o = ((t.hour * 3600 + t.minute * 60 + t.second) * 1000
+             + t.microsecond // 1000)
+    return o
+
+
+def merge_to_bilingual(orig_path: str, trans_path: str, out_path: str,
+                        orig_first: bool = True) -> int:
+    """把原文字幕与译文字幕按时间轴对齐合并为双语 SRT，返回合并条数。
+
+    对齐规则：以开始时间最接近的条目配对（时间差 < 500ms 才配对），
+    避免两个文件条目数不一致时错位。orig_first=True 时原文在上（如英文在上、中文在下）。
+    """
+    orig = _open_srt_any_encoding(orig_path)
+    trans = _open_srt_any_encoding(trans_path)
+    # pysrt 返回 SubRipFile 支持 slice；转 list 后排序保证时间有序
+    o_list = sorted(enumerate(orig), key=_ts_sort_key)
+    t_list = sorted(enumerate(trans), key=_ts_sort_key)
+    n = min(len(o_list), len(t_list))
+
+    out = pysrt.SubRipFile()
+    matched = 0
+    ti = 0
+    for oi, (o_idx, o) in enumerate(o_list):
+        o_start = o.start.ordinal if hasattr(o.start, "ordinal") else 0
+        # 推进 trans 指针到开始时间 >= o_start 的最近条目
+        while ti < len(t_list) - 1:
+            t_cur = t_list[ti][1]
+            t_next = t_list[ti + 1][1]
+            cur_start = t_cur.start.ordinal if hasattr(t_cur.start, "ordinal") else 0
+            next_start = t_next.start.ordinal if hasattr(t_next.start, "ordinal") else 0
+            if abs(next_start - o_start) < abs(cur_start - o_start):
+                ti += 1
+            else:
+                break
+        t = t_list[ti][1] if ti < len(t_list) else None
+        if t is None:
+            break
+        t_start = t.start.ordinal if hasattr(t.start, "ordinal") else 0
+        if abs(t_start - o_start) > 500:  # 时间差过大视为不配对，保留原文单语
+            top_text, bottom_text = (o.text, "") if orig_first else ("", o.text)
+        else:
+            matched += 1
+            top_text, bottom_text = (o.text, t.text) if orig_first else (t.text, o.text)
+        o_text = "\n".join(x.strip() for x in (top_text, bottom_text) if x and x.strip())
+        entry = pysrt.SubRipItem(index=len(out) + 1, start=o.start, end=o.end, text=o_text)
+        out.append(entry)
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    out.save(out_path, encoding="utf-8")
+    return matched
 
 
 def detect_anime_name(video_path: str) -> Optional[str]:

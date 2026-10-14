@@ -9,12 +9,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelna
 import pysrt
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .translator import Translator, detect_anime_name, map_path, scan_videos
 from .translator import VIDEO_ROOT, DATA_DIR
+from .translator import (detect_bilingual_srt, is_bilingual_text,
+                         merge_to_bilingual, BILINGUAL_SUFFIXES)
 
 app = FastAPI(title="字幕翻译器")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -51,7 +53,7 @@ def load_config():
     defaults = {"api_key": "", "base_url": "",
                 "model": "deepseek-v4-flash", "context_model": "deepseek-v4-pro",
                 "batch_size": 12, "use_context": False, "webhook_url": "", "webhook_type": "wecom",
-                "auto_cleanup": False, "bilingual": False}
+                "auto_cleanup": False, "bilingual": False, "bilingual_layout": "orig_first"}
     for k, v in defaults.items():
         config.setdefault(k, v)
     if config.get("api_key"):
@@ -165,7 +167,7 @@ def watch_loop():
                                 t["video"], 0, t["anime_name"],
                                 config["model"], config["context_model"],
                                 config["batch_size"], config.get("use_context", False),
-                                make_fn(t))
+                                make_fn(t), bilingual=config.get("bilingual", False))
                         except Exception as e:
                             if t.get("state") == "cancelled":
                                 t.setdefault("logs", []).append(f"[cancelled] {e}")
@@ -303,36 +305,219 @@ async def index():
 
 
 # ── Bilingual SRT ──
+
+def _sibling_srt(path: str) -> dict:
+    """基于任意同基名字幕路径，返回 {base, chi, eng, bil} 的实际磁盘路径"""
+    real = str(map_path(path))
+    if real.endswith(".chi.srt") or real.endswith(".eng.srt") \
+            or real.endswith(".bilingual.srt") or real.endswith(".zh.srt") \
+            or real.endswith(".en.srt"):
+        base = real.rsplit(".", 2)[0] if real.count(".") >= 2 else real.rsplit(".", 1)[0]
+    else:
+        base = real.rsplit(".", 1)[0]
+    return {
+        "base": base,
+        "chi": base + ".chi.srt",
+        "eng": base + ".eng.srt",
+        "bil": base + ".bilingual.srt",
+    }
+
+
 @app.get("/api/bilingual_srt")
-async def get_bilingual_srt(path: str = ""):
-    """生成双语字幕"""
-    import pysrt
+async def get_bilingual_srt(path: str = "", layout: str = "orig_first",
+                            translate: bool = False):
+    """生成/返回双语字幕。
+
+    优先级：已存在的 .bilingual.srt > 原字幕+译文字幕按时间轴合并。
+    layout: orig_first=原文在上(英上中下) / trans_first=译文在上(中上英下)。
+    translate=True 时若无 .chi.srt 会启动翻译任务（返回 task_id）。
+    """
     real = map_path(path)
     rp = str(real)
-    if rp.endswith('.chi.srt'):
-        base = rp[:-8]
-    elif rp.endswith('.eng.srt'):
+    if rp.endswith('.chi.srt') or rp.endswith('.eng.srt'):
         base = rp[:-8]
     else:
         base = rp.rsplit('.', 1)[0]
     chi_path = base + '.chi.srt'
     eng_path = base + '.eng.srt'
-    if not os.path.exists(chi_path) or not os.path.exists(eng_path):
-        raise HTTPException(404, "字幕文件不存在")
-    
-    chi = pysrt.open(chi_path, encoding='utf-8')
-    eng = pysrt.open(eng_path, encoding='utf-8')
-    n = min(len(chi), len(eng))
-    content = ''
-    for i in range(n):
-        s = chi[i]
-        e = eng[i]
-        content += f'{e.start.to_srt_timestamp()} --> {e.end.to_srt_timestamp()}\n'
-        content += f'{e.text.strip()}\n'
-        content += f'{s.text.strip()}\n'
-        content += '\n'
-    from fastapi import PlainTextResponse
-    return PlainTextResponse(content, media_type='text/plain')
+    bil_path = base + '.bilingual.srt'
+
+    # 已有双语文件且布局一致，直接返回
+    if os.path.exists(bil_path):
+        try:
+            with open(bil_path, encoding="utf-8") as f:
+                return PlainTextResponse(f.read(), media_type="text/plain; charset=utf-8")
+        except Exception:
+            pass  # 读取失败则重新生成
+
+    # 有原+译：按时间轴合并
+    if os.path.exists(chi_path) and os.path.exists(eng_path):
+        orig_first = layout != "trans_first"
+        matched = merge_to_bilingual(eng_path, chi_path, bil_path, orig_first=orig_first)
+        with open(bil_path, encoding="utf-8") as f:
+            content = f.read()
+        logger.info(f"Bilingual merged: {matched} pairs -> {bil_path}")
+        return PlainTextResponse(content, media_type="text/plain; charset=utf-8")
+
+    # 只译文无原文：译文本身即单语，无法组双语
+    if os.path.exists(chi_path) and not os.path.exists(eng_path):
+        # 译文可能本身已是双语（用户自带的中文字幕轨含双语）
+        if detect_bilingual_srt(chi_path):
+            with open(chi_path, encoding="utf-8") as f:
+                return PlainTextResponse(f.read(), media_type="text/plain; charset=utf-8")
+        raise HTTPException(404, "缺少原文字幕（.eng.srt），无法生成双语")
+
+    if translate:
+        # 找到对应的视频文件，启动翻译任务
+        video = None
+        for ext in (".mkv", ".mp4", ".avi", ".mov", ".ts"):
+            cand = base + ext
+            if os.path.exists(cand):
+                video = cand
+                break
+        if not video:
+            raise HTTPException(404, "未找到对应视频文件，无法启动翻译")
+        raise HTTPException(400, f"NEED_TRANSLATE:{video}")
+
+    raise HTTPException(404, "字幕文件不存在")
+
+
+@app.post("/api/bilingual_merge")
+async def bilingual_merge(path: str = "", layout: str = "orig_first"):
+    """把已有的原字幕与翻译字幕合并为双语 .bilingual.srt 文件（保存到磁盘）"""
+    real = map_path(path)
+    rp = str(real)
+    if rp.endswith('.chi.srt') or rp.endswith('.eng.srt'):
+        base = rp[:-8]
+    else:
+        base = rp.rsplit('.', 1)[0]
+    chi_path = base + '.chi.srt'
+    eng_path = base + '.eng.srt'
+    bil_path = base + '.bilingual.srt'
+    if not (os.path.exists(chi_path) and os.path.exists(eng_path)):
+        raise HTTPException(404, "需要同时存在 .eng.srt（原文）和 .chi.srt（译文）")
+    orig_first = layout != "trans_first"
+    matched = merge_to_bilingual(eng_path, chi_path, bil_path, orig_first=orig_first)
+    return {"ok": True, "output": bil_path, "matched": matched,
+            "layout": "orig_first" if orig_first else "trans_first"}
+
+
+@app.get("/api/bilingual_detect")
+def bilingual_detect(path: str):
+    """检测字幕文件是否为双语（逐条统计，前端展示用）"""
+    real = map_path(path)
+    if not os.path.exists(real):
+        raise HTTPException(404, "文件不存在")
+    try:
+        subs = pysrt.open(real, encoding="utf-8")
+    except Exception:
+        subs = None
+        for enc in ("utf-8-sig", "gbk", "latin-1", "shift-jis"):
+            try:
+                subs = pysrt.open(real, encoding=enc)
+                break
+            except Exception:
+                continue
+    if subs is None:
+        raise HTTPException(500, "无法解码字幕文件")
+    total = len(subs)
+    bi = sum(1 for s in subs if is_bilingual_text(s.text))
+    return {"path": path, "total": total, "bilingual_lines": bi,
+            "is_bilingual": bi >= max(2, int(total * 0.6))}
+
+
+class BilingualTranslateRequest(BaseModel):
+    path: str            # 源字幕或视频路径
+    bilingual: bool = True
+    layout: str = "orig_first"  # orig_first / trans_first
+
+
+@app.post("/api/bilingual_translate")
+async def bilingual_translate(req: BilingualTranslateRequest):
+    """直接翻译出双语字幕：对已有单语字幕启动翻译，完成后自动组双语。
+
+    - path 可以是视频（走正常提取流程）或 .eng.srt / .chi.srt 字幕文件
+    - 若源字幕已是双语：直接拆分保存，不调用 API
+    - 翻译完成后自动生成 .bilingual.srt
+    """
+    if not translator:
+        raise HTTPException(400, "请先配置 API")
+    real = map_path(req.path)
+    if not os.path.exists(real):
+        raise HTTPException(404, "文件不存在")
+
+    # 字幕文件 → 找对应视频（提取流程需要视频路径；找不到则改用字幕直翻）
+    target_video = real
+    if str(real).endswith((".srt", ".ass", ".ssa")):
+        base = str(real)
+        for suf in (".chi.srt", ".eng.srt", ".bilingual.srt", ".srt", ".ass", ".ssa"):
+            if base.endswith(suf):
+                base = base[:-len(suf)]
+                break
+        target_video = None
+        for ext in (".mkv", ".mp4", ".avi", ".mov", ".ts"):
+            if os.path.exists(base + ext):
+                target_video = base + ext
+                break
+        if target_video is None:
+            # 无视频：合成同名 .mkv 路径，让 run_translation 的外挂字幕
+            # fallback（find_external_srt）正确以 base 为基名找到源字幕，
+            # 避免 srt 文件名被当作视频名产生 "xx.eng.chi.srt" 双重后缀
+            target_video = base + ".mkv"
+
+    anime = detect_anime_name(target_video)
+    tid = str(uuid.uuid4())[:8]
+    task = {"task_id": tid, "video": target_video, "anime_name": anime,
+            "state": "pending", "progress": 0, "total": 0,
+            "message": "Queued...", "logs": [], "guide": None,
+            "output": None, "samples": [], "source": "manual"}
+    tasks[tid] = task
+    want_layout_orig_first = req.layout != "trans_first"
+
+    def update(**kw):
+        if kw.get("check_cancelled"):
+            return task.get("state") in ("cancelled", "error")
+        if task.get("state") == "cancelled":
+            return True
+        for k, v in kw.items():
+            if k == "log":
+                task["logs"].append(f"[{task['state']}] {v}")
+            elif k in task:
+                task[k] = v
+        if kw.get("state") == "done":
+            _add_history(task)
+            if task.get("output"):
+                try:
+                    real_out = map_path(task["output"])
+                    rp = str(real_out)
+                    base = rp[:-8] if rp.endswith('.chi.srt') else rp.rsplit('.', 1)[0]
+                    eng_path, chi_path = base + '.eng.srt', base + '.chi.srt'
+                    bil_path = base + '.bilingual.srt'
+                    if os.path.exists(eng_path) and os.path.exists(chi_path):
+                        matched = merge_to_bilingual(eng_path, chi_path, bil_path,
+                                                     orig_first=want_layout_orig_first)
+                        task["logs"].append(f"[ok] Bilingual SRT generated ({matched} pairs)")
+                except Exception as e:
+                    task["logs"].append(f"[error] Bilingual failed: {e}")
+
+    def run():
+        try:
+            translator.run_translation(
+                target_video, 0, anime,
+                config["model"], config["context_model"],
+                config["batch_size"], config.get("use_context", False),
+                update, bilingual=True)
+        except Exception as e:
+            if task.get("state") == "cancelled":
+                task["logs"].append(f"[cancelled] {e}")
+                return
+            task["state"] = "error"
+            task["message"] = str(e)
+            task["logs"].append(f"[error] {e}")
+            _mark_task_done(task)
+
+    executor.submit(run)
+    return {"task_id": tid, "anime_name": anime}
 
 
 # ── Global Search & Replace ──
@@ -423,6 +608,7 @@ class ConfigUpdate(BaseModel):
     use_context: Optional[bool] = None
     auto_cleanup: Optional[bool] = None
     bilingual: Optional[bool] = None
+    bilingual_layout: Optional[str] = None
     webhook_url: Optional[str] = None
     webhook_type: Optional[str] = None
 
@@ -453,6 +639,8 @@ async def update_config(data: ConfigUpdate):
         config["auto_cleanup"] = updates["auto_cleanup"]
     if "bilingual" in updates:
         config["bilingual"] = updates["bilingual"]
+    if updates.get("bilingual_layout") in ("orig_first", "trans_first"):
+        config["bilingual_layout"] = updates["bilingual_layout"]
     if "webhook_url" in updates:
         config["webhook_url"] = updates["webhook_url"]
     if "webhook_type" in updates:
@@ -479,10 +667,22 @@ def browse(path: str = "/", sort: str = "name"):
             mtime = os.path.getmtime(full)
         except OSError:
             continue  # 扫描期间被删除/无权限的条目直接跳过
+        is_bilingual = False
+        if ext in (".srt", ".ass"):
+            # 双语字幕标记：文件名约定 或 内容检测（内容检测有 IO 开销，仅对 .srt 做）
+            if name.lower().endswith(BILINGUAL_SUFFIXES):
+                is_bilingual = True
+            elif ext == ".srt":
+                try:
+                    is_bilingual = detect_bilingual_srt(full)
+                except Exception:
+                    is_bilingual = False
         entries.append({
             "name": name, "path": os.path.join(path, name).replace("//", "/"),
             "is_dir": is_dir,
-            "is_video": ext in (".mkv", ".mp4", ".avi", ".mov", ".ts"), "is_srt": ext in (".srt", ".ass"),
+            "is_video": ext in (".mkv", ".mp4", ".avi", ".mov", ".ts"),
+            "is_srt": ext in (".srt", ".ass"),
+            "is_bilingual": is_bilingual,
             "mtime": mtime,
             "mtime_str": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),
         })
@@ -515,11 +715,17 @@ def scan_folder(path: str = "/"):
     result = []
     for v in videos:
         name = Path(v).name
-        has_chi = os.path.exists(str(Path(v).parent / f"{Path(v).stem}.chi.srt"))
+        stem = Path(v).stem
+        vparent = Path(v).parent
+        has_chi = os.path.exists(str(vparent / f"{stem}.chi.srt"))
+        has_eng = os.path.exists(str(vparent / f"{stem}.eng.srt"))
+        has_bil = os.path.exists(str(vparent / f"{stem}.bilingual.srt"))
         result.append({"path": v, "name": name, "translated": has_chi,
+                       "has_eng": has_eng, "has_bilingual": has_bil,
                        "anime": detect_anime_name(v)})
     return {"videos": result, "total": len(result),
-            "translated": sum(1 for r in result if r["translated"])}
+            "translated": sum(1 for r in result if r["translated"]),
+            "bilingual": sum(1 for r in result if r["has_bilingual"])}
 
 
 # ── Translate ──
@@ -530,6 +736,7 @@ class TranslateRequest(BaseModel):
     anime_name: Optional[str] = None
     use_context: Optional[bool] = None
     videos: Optional[list] = None  # 批量翻译时指定具体视频路径
+    bilingual: Optional[bool] = None  # None=跟随全局配置
 
 
 @app.post("/api/translate")
@@ -541,6 +748,7 @@ async def start_translate(req: TranslateRequest):
         raise HTTPException(404, "文件不存在")
     anime = req.anime_name or detect_anime_name(real)
     use_ctx = req.use_context if req.use_context is not None else config.get("use_context", False)
+    want_bilingual = req.bilingual if req.bilingual is not None else config.get("bilingual", False)
 
     tid = str(uuid.uuid4())[:8]
     task = {"task_id": tid, "video": real, "anime_name": anime,
@@ -562,24 +770,20 @@ async def start_translate(req: TranslateRequest):
                 task[k] = v
         if kw.get("state") == "done":
             _add_history(task)
-            # Auto generate bilingual SRT
-            if config.get("bilingual", False) and task.get("output"):
+            # 翻译时未开启双语，但用户请求了双语（单次覆盖）：完成后补生成
+            if want_bilingual and task.get("output"):
                 try:
-                    real = map_path(task["output"])
-                    rp = str(real)
+                    real_out = map_path(task["output"])
+                    rp = str(real_out)
                     base = rp[:-8] if rp.endswith('.chi.srt') else rp.rsplit('.', 1)[0]
                     eng_path = base + '.eng.srt'
                     chi_path = base + '.chi.srt'
                     bil_path = base + '.bilingual.srt'
                     if os.path.exists(eng_path) and os.path.exists(chi_path):
-                        import pysrt
-                        chi = pysrt.open(chi_path, encoding='utf-8')
-                        eng = pysrt.open(eng_path, encoding='utf-8')
-                        n = min(len(chi), len(eng))
-                        for i in range(n):
-                            chi[i].text = eng[i].text.strip() + '\n' + chi[i].text.strip()
-                        chi.save(bil_path, encoding='utf-8')
-                        task["logs"].append("[ok] Bilingual SRT generated")
+                        matched = merge_to_bilingual(
+                            eng_path, chi_path, bil_path,
+                            orig_first=config.get("bilingual_layout", "orig_first") == "orig_first")
+                        task["logs"].append(f"[ok] Bilingual SRT generated ({matched} pairs)")
                 except Exception as e:
                     task["logs"].append(f"[error] Bilingual failed: {e}")
             # Auto cleanup .eng.srt
@@ -600,7 +804,8 @@ async def start_translate(req: TranslateRequest):
             translator.run_translation(
                 real, req.track_index, anime,
                 config["model"], config["context_model"],
-                config["batch_size"], use_ctx, update)
+                config["batch_size"], use_ctx, update,
+                bilingual=want_bilingual)
         except Exception as e:
             # 用户主动取消：保持 cancelled 状态，不覆盖为 error
             if task.get("state") == "cancelled":
@@ -675,7 +880,8 @@ def start_batch(req: TranslateRequest):
             try:
                 translator.run_translation(
                     vpath, tidx, an, config["model"], config["context_model"],
-                    config["batch_size"], ctx, make_fn(t))
+                    config["batch_size"], ctx, make_fn(t),
+                    bilingual=config.get("bilingual", False))
             except Exception as e:
                 if t.get("state") == "cancelled":
                     t.setdefault("logs", []).append(f"[cancelled] {e}")
@@ -1071,7 +1277,17 @@ async def api_video_info(path: str = ""):
         ]
     # 检查是否已翻译
     chi = str(Path(real).parent / f"{Path(real).stem}.chi.srt")
+    bil = str(Path(real).parent / f"{Path(real).stem}.bilingual.srt")
+    eng = str(Path(real).parent / f"{Path(real).stem}.eng.srt")
     result["has_chinese"] = os.path.exists(chi)
+    result["has_bilingual"] = os.path.exists(bil)
+    result["has_english"] = os.path.exists(eng)
+    # 已有中文单语字幕本身是双语的情况（用户自带）
+    if not result["has_bilingual"] and result["has_chinese"]:
+        try:
+            result["chi_is_bilingual"] = detect_bilingual_srt(chi)
+        except Exception:
+            result["chi_is_bilingual"] = False
     return result
 
 
@@ -1149,7 +1365,8 @@ async def api_batch(req: BatchRequest):
             try:
                 translator.run_translation(
                     vpath, tidx, an, config["model"], config["context_model"],
-                    config["batch_size"], config.get("use_context", False), make_fn(t))
+                    config["batch_size"], config.get("use_context", False), make_fn(t),
+                    bilingual=config.get("bilingual", False))
             except Exception as e:
                 if t.get("state") == "cancelled":
                     t.setdefault("logs", []).append(f"[cancelled] {e}")

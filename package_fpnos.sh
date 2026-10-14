@@ -70,7 +70,7 @@ done
 echo "📋 填写 manifest..."
 cat > manifest << 'MANEOF'
 appname=subtitle-translator
-version=1.0.0
+version=1.3.0
 display_name=字幕翻译器
 desc=AI驱动的番剧字幕自动翻译工具。自动提取视频英文字幕，通过AI翻译成中文字幕，支持番剧背景知识优化、批量处理、文件夹订阅自动翻译。
 arch=x86_64

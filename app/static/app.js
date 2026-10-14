@@ -24,9 +24,10 @@ async function browse(p, keep) {
     for (const e of d.entries) {
       let ic = e.is_video ? '🎬' : (e.is_srt ? '📝' : (e.is_dir ? '📁' : '📄'));
       let sel = e.path === selVideo ? ' sel' : '';
-      let tag = e.is_video ? '<span class="tag">视频</span>' : (e.is_srt ? '<span class="tag green">字幕</span>' : '');
+      let tag = e.is_video ? '<span class="tag">视频</span>' : (e.is_srt ? (e.is_bilingual ? '<span class="tag bi">双语</span>' : '<span class="tag green">字幕</span>') : '');
       let time = e.mtime_str ? `<span class="meta">${e.mtime_str}</span>` : '';
-      h += `<div class="f-item${sel}" onclick="${e.is_dir ? `browse('${escArg(e.path)}')` : e.is_srt ? `openSrtFile('${escArg(e.path)}')` : `selectVideo('${escArg(e.path)}')`}"><div class="icon">${ic}</div><div class="name">${esc(e.name)}</div>${tag}${time}</div>`;
+      let clickFn = e.is_dir ? `browse('${escArg(e.path)}')` : e.is_srt ? `openSrtFile('${escArg(e.path)}', ${e.is_bilingual ? 'true' : 'false'})` : `selectVideo('${escArg(e.path)}')`;
+      h += `<div class="f-item${sel}" onclick="${clickFn}"><div class="icon">${ic}</div><div class="name">${esc(e.name)}</div>${tag}${time}</div>`;
     }
     $('file-list').innerHTML = h;
   } catch (e) { toast('加载失败', 'err'); console.error(e); }
@@ -40,18 +41,20 @@ function loadPath() {
   else browse(p);
 }
 
-async function openSrtFile(p) {
+async function openSrtFile(p, isBilingual) {
   switchTab('samples');
-  $('panel-samples').innerHTML = emptyState('加载中...', '');
+  $('panel-samples').innerHTML = emptyState('加载中...', '', '…');
   try {
     let r = await fetch(`${API}/subtitle_read?path=${encodeURIComponent(p)}`);
     let d = await r.json();
     if (!d.entries) { toast('No entries', 'err'); return; }
     let nm = p.split('/').pop();
     window._outPath = p;
-    let h = `<div class="panel-toolbar"><span class="hint">${esc(nm)} · ${d.total}条</span><div class="ops">
+    window._openIsBilingual = !!isBilingual || /bilingual|\.bi\.|\.dual\.|chseng|engchs/i.test(nm);
+    let biBadge = window._openIsBilingual ? ' <span class="tag bi">双语</span>' : '';
+    let h = `<div class="panel-toolbar"><span class="hint">${esc(nm)} · ${d.total}条${biBadge}</span><div class="ops">
       <button class="btn primary sm" onclick="saveEdits('${escArg(p)}')">保存</button>
-      <button class="btn sm" onclick="downloadBilingual('${escArg(p)}')">双语字幕</button>
+      <button class="btn sm" onclick="downloadBilingual('${escArg(p)}')" title="生成/下载双语字幕">双语字幕</button>
       <a class="btn sm" href="${API}/download?path=${encodeURIComponent(p)}" download>下载</a>
       <button class="btn sm" onclick="showSearchReplace()" id="btn-search">搜索替换</button></div></div>`;
     h += `<div class="samples-grid">`;
@@ -192,6 +195,8 @@ function poll(tid) {
           <div class="ops">
             <button class="btn primary sm" onclick="saveEdits('${escArg(outPath)}')">保存修改</button>
             <button class="btn sm" onclick="refineGuide()">微调指南</button>
+            <button class="btn sm" onclick="mergeBilingual('${escArg(outPath)}')" title="用原文+译文生成 .bilingual.srt">组双语</button>
+            <button class="btn sm" onclick="downloadBilingual('${escArg(outPath)}')" title="下载双语字幕">下载双语</button>
             <a class="btn sm" href="${API}/download?path=${encodeURIComponent(outPath)}" download>下载 .srt</a>
           </div>
         </div>`;
@@ -236,6 +241,14 @@ async function toggleContext() {
   } catch (e) {}
 }
 
+async function toggleBilingual() {
+  let v = $('bilingual-switch').checked;
+  try {
+    await fetch(`${API}/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ bilingual: v }) });
+    toast(v ? '双语输出已开启：翻译完成后自动生成 .bilingual.srt' : '双语输出已关闭', 'ok');
+  } catch (e) {}
+}
+
 // ═══ 设置 ═══
 async function testWebhook() {
   let url = $('cfg-webhook').value.trim();
@@ -262,6 +275,10 @@ async function openSettings() {
     $('cfg-cmodel').value = c.context_model || '';
     $('cfg-batch').value = c.batch_size || 12;
     $('ctx-switch').checked = c.use_context || false;
+    $('bilingual-switch').checked = c.bilingual || false;
+    $('cfg-bilingual').checked = c.bilingual || false;
+    $('cfg-bilingual-layout').value = c.bilingual_layout || 'orig_first';
+    window._bilingualLayout = c.bilingual_layout || 'orig_first';
     $('cfg-webhook').value = c.webhook_url || '';
     $('cfg-webhook-type').value = c.webhook_type || 'wecom';
   } catch (e) {}
@@ -271,13 +288,16 @@ async function saveSettings() {
   let b = {
     api_key: $('cfg-key').value, base_url: $('cfg-url').value, model: $('cfg-model').value,
     context_model: $('cfg-cmodel').value, batch_size: parseInt($('cfg-batch').value),
-    use_context: $('ctx-switch').checked, webhook_url: $('cfg-webhook').value, webhook_type: $('cfg-webhook-type').value
+    use_context: $('ctx-switch').checked, bilingual: $('cfg-bilingual').checked,
+    bilingual_layout: $('cfg-bilingual-layout').value,
+    webhook_url: $('cfg-webhook').value, webhook_type: $('cfg-webhook-type').value
   };
+  window._bilingualLayout = b.bilingual_layout;
   try {
     let r = await fetch(`${API}/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
     let d = await r.json();
     $('settings-msg').textContent = d.ok ? '已保存' : '失败';
-    if (d.ok) setTimeout(closeSettings, 600);
+    if (d.ok) { $('bilingual-switch').checked = b.bilingual; setTimeout(closeSettings, 600); }
   } catch (e) { $('settings-msg').textContent = '保存失败'; }
 }
 
@@ -297,8 +317,9 @@ async function scanBatch() {
     let r = await fetch(`${API}/scan_folder?path=${encodeURIComponent(p)}`);
     let d = await r.json();
     var un = d.videos.filter(function (v) { return !v.translated; }).length;
-    var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:12px;color:var(--text-3)">共 ' + d.total + ' 个，' + un + ' 个待翻译</span><div style="display:flex;gap:4px"><button class="btn sm" onclick="batchSelectAll()">全选</button><button class="btn sm" onclick="batchDeselectAll()">取消</button><button class="btn sm" onclick="batchToggle()">反选</button></div></div>';
-    d.videos.forEach(function (v) { h += '<div class="batch-row"><input type="checkbox" class="batch-cb" data-path="' + esc(v.path) + '" ' + (v.translated ? '' : 'checked') + '><span class="name">' + esc(v.name) + '</span><span class="state ' + (v.translated ? 'done' : 'wait') + '">' + (v.translated ? '已翻译' : '待翻译') + '</span></div>'; });
+    var bi = d.bilingual || 0;
+    var h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:12px;color:var(--text-3)">共 ' + d.total + ' 个，' + un + ' 个待翻译' + (bi ? '，' + bi + ' 个已双语' : '') + '</span><div style="display:flex;gap:4px"><button class="btn sm" onclick="batchSelectAll()">全选</button><button class="btn sm" onclick="batchDeselectAll()">取消</button><button class="btn sm" onclick="batchToggle()">反选</button></div></div>';
+    d.videos.forEach(function (v) { h += '<div class="batch-row"><input type="checkbox" class="batch-cb" data-path="' + esc(v.path) + '" ' + (v.translated ? '' : 'checked') + '><span class="name">' + esc(v.name) + '</span><span class="state ' + (v.has_bilingual ? 'bi' : v.translated ? 'done' : 'wait') + '">' + (v.has_bilingual ? '双语' : v.translated ? '已翻译' : '待翻译') + '</span></div>'; });
     $('batch-list').innerHTML = h;
     $('batch-go').disabled = !un;
     $('batch-msg').textContent = '';
@@ -541,17 +562,74 @@ async function stopTranslation() {
 
 // ═══ 双语 + 搜索替换 + 统计 ═══
 async function downloadBilingual(path) {
+  // 目标：能拿到「原文+译文」就组合成双语；已双语文件直接下载
+  path = path || window._outPath || '';
+  if (!path) { toast('没有字幕路径', 'err'); return; }
+  let layout = window._bilingualLayout || 'orig_first';
   try {
-    var r = await fetch(API + '/bilingual_srt?path=' + encodeURIComponent(path));
-    if (!r.ok) { toast('双语字幕生成失败', 'err'); return; }
-    var text = await r.text();
-    var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = path.split('/').pop().replace('.chi.srt', '.bilingual.srt');
-    a.click();
-    toast('双语字幕已下载', 'ok');
+    var r = await fetch(API + '/bilingual_srt?path=' + encodeURIComponent(path) + '&layout=' + layout);
+    if (r.ok) {
+      var text = await r.text();
+      var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = path.split('/').pop().replace(/(\.chi|\.eng)?\.srt$/, '.bilingual.srt');
+      a.click();
+      toast('双语字幕已下载', 'ok');
+      return;
+    }
+    var err = await r.json().catch(() => ({}));
+    // 缺翻译：提示一键「翻译出双语」
+    if (r.status === 400 && String(err.detail || '').startsWith('NEED_TRANSLATE:')) {
+      var video = err.detail.slice('NEED_TRANSLATE:'.length);
+      if (confirm('还没有中文翻译。是否现在开始翻译并自动生成双语字幕？')) {
+        startBilingualTranslate(video);
+      }
+      return;
+    }
+    toast(err.detail || '双语字幕生成失败', 'err');
   } catch (e) { toast('失败: ' + e.message, 'err'); }
+}
+
+async function mergeBilingual(path) {
+  // 把已有的原文(.eng.srt)+译文(.chi.srt)合并保存为 .bilingual.srt
+  path = path || window._outPath || '';
+  if (!path) { toast('没有字幕路径', 'err'); return; }
+  let layout = window._bilingualLayout || 'orig_first';
+  try {
+    let r = await fetch(API + '/bilingual_merge?path=' + encodeURIComponent(path) + '&layout=' + layout, { method: 'POST' });
+    let d = await r.json();
+    if (d.ok) {
+      toast(`已生成双语字幕（对齐 ${d.matched} 条）`, 'ok');
+      browse(curPath, true);
+    } else {
+      toast(d.detail || '合并失败', 'err');
+    }
+  } catch (e) { toast('合并失败: ' + e.message, 'err'); }
+}
+
+async function startBilingualTranslate(path) {
+  // 直接翻译出双语：源可以是视频或字幕文件，完成后自动组双语
+  path = path || window._outPath || selVideo || '';
+  if (!path) { toast('请先选择视频或字幕文件', 'err'); return; }
+  let layout = window._bilingualLayout || 'orig_first';
+  try {
+    let r = await fetch(API + '/bilingual_translate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: path, bilingual: true, layout: layout })
+    });
+    if (!r.ok) { let e = await r.json().catch(() => ({})); toast(e.detail || '启动失败', 'err'); return; }
+    let d = await r.json();
+    window._guideShown = false;
+    $('status-dot').className = 'status-dot active';
+    setStartBtnStop();
+    window._translating = true;
+    window._currentTaskId = d.task_id;
+    switchTab('tracks');
+    $('panel-tracks').innerHTML = emptyState('开始翻译（输出双语）...', '', '…');
+    toast('已启动双语翻译任务', 'ok');
+    poll(d.task_id);
+  } catch (e) { toast('启动失败: ' + e.message, 'err'); }
 }
 
 function showSearchReplace() {
@@ -656,6 +734,8 @@ async function openHistoryEditor(path, name) {
       <div class="ops">
         <button class="btn primary sm" onclick="saveEdits('${escArg(path)}')">保存修改</button>
         <button class="btn sm" onclick="refineGuide()" id="btn-refine">微调指南</button>
+        <button class="btn sm" onclick="mergeBilingual('${escArg(path)}')" title="用原文+译文生成 .bilingual.srt">组双语</button>
+        <button class="btn sm" onclick="downloadBilingual('${escArg(path)}')" title="下载双语字幕">下载双语</button>
       </div>
     </div>`;
     h += `<div class="samples-grid">`;
@@ -834,6 +914,9 @@ function updateThemeIcons(dark) {
 fetch(API + '/config').then(function (r) { return r.json(); }).then(function (c) {
   var ctxToggle = document.getElementById('ctx-switch');
   if (ctxToggle) ctxToggle.checked = c.use_context || false;
+  var biToggle = document.getElementById('bilingual-switch');
+  if (biToggle) biToggle.checked = c.bilingual || false;
+  window._bilingualLayout = c.bilingual_layout || 'orig_first';
 }).catch(function () {});
 
 browse('/').then(function () {
