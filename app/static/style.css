@@ -207,6 +207,10 @@ a{color:var(--accent);text-decoration:none}
 .ctx-toggle input:checked+.track{background:var(--accent);border-color:var(--accent)}
 .ctx-toggle input:checked+.track::after{transform:translateX(16px);background:#fff}
 
+/* 设置模态框内的开关行：覆盖 .modal label 的 block 样式 */
+.modal label.ctx-toggle{display:flex;margin-bottom:0;font-weight:500}
+.bi-field-row{justify-content:space-between;width:100%}
+
 /* Tabs */
 .tabs{
   display:flex;gap:2px;padding:0 24px;border-bottom:1px solid var(--border-soft);
